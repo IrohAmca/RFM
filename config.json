@@ -37,5 +37,10 @@
     "split_seed": 42,
     "feature_activity_threshold": 0.001,
     "output_model_path": "checkpoints/sae_k16.pt"
-  }
+  },
+  "feature-mapping": {
+      "model_path": "checkpoints/sae_k16_l1_0p02.pt",
+      "device": "cuda"
+    }
+  
 }

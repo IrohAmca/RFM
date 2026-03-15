@@ -1,12 +1,14 @@
-from gpt2_extractor import GPT2Extractor
-from base import BaseDataLoader
-import torch
-from itertools import islice
-from tqdm import tqdm
-from pathlib import Path
 import argparse
+from itertools import islice
+from pathlib import Path
 
+import torch
+from tqdm import tqdm
+
+from base import BaseDataLoader
 from config_manager import ConfigManager
+from extractor_factory import ExtractorFactory
+from project_layout import default_activations_dir
 
 
 def chunk_saver(
@@ -20,7 +22,8 @@ def chunk_saver(
     output_prefix,
 ):
     safe_target = target_layer.replace(".", "_")
-    filename = f"{output_prefix}_{model_name}_{safe_target}_{index}.pt"
+    safe_model = str(model_name).replace("/", "_").replace("\\", "_")
+    filename = f"{output_prefix}_{safe_model}_{safe_target}_{index}.pt"
     file_path = Path(output_dir) / filename
 
     chunk_data = {
@@ -104,13 +107,15 @@ target = config.get("extraction.target")
 chunk_size = int(config.get("extraction.chunk_size", 1_000_000))
 count = int(config.get("extraction.count", 100))
 output_dir = config.get("extraction.output_dir", ".")
+if output_dir in (None, "", "."):
+    output_dir = default_activations_dir(config)
 output_prefix = config.get("extraction.output_prefix", "activations")
 activation_dtype = resolve_dtype(config.get("extraction.dtype", "bfloat16"))
 text_field = config.get("dataloader.text_field", "content")
 
 Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-extractor = GPT2Extractor(config)
+extractor = ExtractorFactory.create(config)
 dataloader = BaseDataLoader(config)
 dataloader.load()
 

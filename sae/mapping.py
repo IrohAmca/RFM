@@ -8,6 +8,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from config_manager import ConfigManager
+from project_layout import default_checkpoint_path, default_feature_mapping_dir
 from sae.model import SparseAutoEncoder
 
 
@@ -333,10 +334,20 @@ class FeatureMapping:
         count = int(mapping_cfg.get("count", 2000))
         top_k = int(mapping_cfg.get("top_k", 10))
         threshold = float(mapping_cfg.get("strength_threshold", 0.0))
-        event_output_path = mapping_cfg.get("event_output_path", "reports/feature_mapping_events.csv")
-        summary_txt_path = mapping_cfg.get("summary_output_path", "reports/feature_mapping_summary.txt")
-        summary_csv_path = mapping_cfg.get("summary_csv_output_path", "reports/feature_mapping_feature_summary.csv")
-        checkpoint_path = mapping_cfg.get("model_path", "")
+        base_mapping_dir = Path(default_feature_mapping_dir(self.config))
+        event_output_path = mapping_cfg.get(
+            "event_output_path",
+            str(base_mapping_dir / "feature_mapping_events.csv"),
+        )
+        summary_txt_path = mapping_cfg.get(
+            "summary_output_path",
+            str(base_mapping_dir / "feature_mapping_summary.txt"),
+        )
+        summary_csv_path = mapping_cfg.get(
+            "summary_csv_output_path",
+            str(base_mapping_dir / "feature_mapping_feature_summary.csv"),
+        )
+        checkpoint_path = mapping_cfg.get("model_path") or default_checkpoint_path(self.config)
         show_token_progress = bool(mapping_cfg.get("show_token_progress", True))
 
         input_dim = self.infer_input_dim()

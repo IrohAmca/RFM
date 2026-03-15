@@ -1,0 +1,53 @@
+{
+  "model_name": "ytu-ce-cosmos/turkish-gpt2",
+  "dataloader": {
+    "dataset_name": "dair-ai/emotion",
+    "dataset_config_name": null,
+    "split": "train",
+    "data_dir": null,
+    "streaming": false,
+    "text_field": "text"
+  },
+  "extraction": {
+    "target": "blocks.0.hook_resid_post",
+    "count": 800,
+    "chunk_size": 10000000,
+    "dtype": "bfloat16",
+    "output_dir": "runs/turkish-gpt2/activations",
+    "output_prefix": "activations"
+  },
+  "datasets": {
+    "path": [
+      "runs/turkish-gpt2/activations/activations_ytu-ce-cosmos_turkish-gpt2_blocks_0_hook_resid_post_0.pt"
+    ]
+  },
+  "sae": {
+    "hidden_dim": 12288,
+    "sparsity_weight": 0.005,
+    "sparsity_sweep": []
+  },
+  "train": {
+    "batch_size": 256,
+    "epochs": 6,
+    "learning_rate": 0.0005,
+    "weight_decay": 0.0,
+    "device": "cuda",
+    "validation_split": 0.1,
+    "split_seed": 42,
+    "feature_activity_threshold": 0.001,
+    "output_model_path": "runs/turkish-gpt2/checkpoints/sae.pt"
+  },
+  "feature-mapping": {
+    "model_path": "runs/turkish-gpt2/checkpoints/sae.pt",
+    "device": "cuda",
+    "tokenizer_name": "ytu-ce-cosmos/turkish-gpt2",
+    "summary_output_path": "runs/turkish-gpt2/reports/feature_mapping/feature_mapping_summary.txt",
+    "event_output_path": "runs/turkish-gpt2/reports/feature_mapping/feature_mapping_events.csv",
+    "summary_csv_output_path": "runs/turkish-gpt2/reports/feature_mapping/feature_mapping_feature_summary.csv",
+    "top_k": 10,
+    "strength_threshold": 0.001,
+    "prompt_preview_chars": 180,
+    "show_token_progress": true,
+    "count": 2000
+  }
+}

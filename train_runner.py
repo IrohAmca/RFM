@@ -5,6 +5,7 @@ from pathlib import Path
 import torch
 
 from config_manager import ConfigManager
+from project_layout import default_checkpoint_path
 from sae.train import train
 
 
@@ -30,7 +31,10 @@ def parse_args():
 def _resolve_save_path(config, override_path=None):
     if override_path:
         return override_path
-    return config.get("train.output_model_path", "checkpoints/sae.pt")
+    configured = config.get("train.output_model_path", "checkpoints/sae.pt")
+    if configured in (None, "", "checkpoints/sae.pt"):
+        return default_checkpoint_path(config)
+    return configured
 
 
 def _save_checkpoint(model, config, save_path):

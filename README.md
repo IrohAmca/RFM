@@ -48,3 +48,58 @@ Feature mapping settings are controlled under `feature-mapping` in `config.json`
 - `top_k`
 - `strength_threshold`
 - `count`
+
+## Scalable Project Design (Per Model)
+
+Use one config per model and keep outputs isolated under `runs/<model>/`.
+
+- Activation chunks: `runs/<model>/activations/`
+- SAE checkpoints: `runs/<model>/checkpoints/`
+- Mapping reports: `runs/<model>/reports/feature_mapping/`
+
+Recommended config layout:
+
+- `configs/models/gpt2-small.emotion.json`
+- `configs/models/turkish-gpt2.emotion.json`
+
+Run each model independently with its own config:
+
+```bash
+python runner.py --config configs/models/gpt2-small.emotion.json
+python train_runner.py --config configs/models/gpt2-small.emotion.json
+python -m sae.mapping --config configs/models/gpt2-small.emotion.json
+```
+
+Implementation note:
+
+- `extractor_factory.py` centralizes extractor selection.
+- `project_layout.py` centralizes model-scoped path conventions.
+
+## Per-Model Project Layout
+
+Use one config file per model, and keep outputs isolated by model under `runs/`.
+
+Suggested layout:
+
+- `configs/models/gpt2-small.emotion.json`
+- `configs/models/turkish-gpt2.emotion.json`
+- `runs/gpt2-small/activations`
+- `runs/gpt2-small/checkpoints`
+- `runs/gpt2-small/reports/feature_mapping`
+- `runs/turkish-gpt2/activations`
+- `runs/turkish-gpt2/checkpoints`
+- `runs/turkish-gpt2/reports/feature_mapping`
+
+Run each model with its own config:
+
+```bash
+python runner.py --config configs/models/gpt2-small.emotion.json
+python train_runner.py --config configs/models/gpt2-small.emotion.json
+python -m sae.mapping --config configs/models/gpt2-small.emotion.json
+python report_plots.py --mode mapping --output-dir runs/gpt2-small/reports/feature_mapping/viz
+
+python runner.py --config configs/models/turkish-gpt2.emotion.json
+python train_runner.py --config configs/models/turkish-gpt2.emotion.json
+python -m sae.mapping --config configs/models/turkish-gpt2.emotion.json
+python report_plots.py --mode mapping --output-dir runs/turkish-gpt2/reports/feature_mapping/viz
+```

@@ -6,8 +6,8 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 import torch
-
 
 DEFAULT_METRICS = [
     "train_loss",
@@ -23,7 +23,14 @@ DEFAULT_METRICS = [
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Generate SAE training charts from checkpoint histories."
+        description="Generate SAE training or feature-mapping charts."
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="training",
+        choices=["training", "mapping"],
+        help="Which report family to generate.",
     )
     parser.add_argument(
         "--checkpoints-dir",
@@ -42,6 +49,30 @@ def parse_args():
         type=str,
         default="reports",
         help="Output directory for generated png/csv files.",
+    )
+    parser.add_argument(
+        "--mapping-events-csv",
+        type=str,
+        default="reports/feature_mapping/feature_mapping_events.csv",
+        help="Path to feature mapping events CSV.",
+    )
+    parser.add_argument(
+        "--mapping-summary-csv",
+        type=str,
+        default="reports/feature_mapping/feature_mapping_feature_summary.csv",
+        help="Path to feature mapping summary CSV.",
+    )
+    parser.add_argument(
+        "--mapping-token-pairs-csv",
+        type=str,
+        default="reports/feature_mapping/feature_mapping_feature_summary_token_pairs.csv",
+        help="Path to feature mapping token-pairs CSV.",
+    )
+    parser.add_argument(
+        "--top-features",
+        type=int,
+        default=30,
+        help="Top-N features to include in mapping charts.",
     )
     return parser.parse_args()
 
@@ -222,12 +253,164 @@ def build_epoch_metric_charts(runs, output_dir: Path):
         plt.close(fig)
 
 
-def main():
-    args = parse_args()
+def _read_csv_rows(path: Path):
+    if not path.exists():
+        raise FileNotFoundError(f"CSV not found: {path}")
+    with path.open("r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        return list(reader)
 
+
+def _to_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def build_mapping_feature_importance_chart(summary_rows, output_path: Path, top_n=30):
+    if not summary_rows:
+        return
+
+    rows = [
+        {
+            "feature_id": _to_int(r.get("feature_id")),
+            "count_active": _to_int(r.get("count_active")),
+            "p95_strength": _to_float(r.get("p95_strength")),
+        }
+        for r in summary_rows
+    ]
+    rows.sort(key=lambda r: (r["count_active"], r["p95_strength"]), reverse=True)
+    rows = rows[: max(1, int(top_n))]
+    if not rows:
+        return
+
+    labels = [str(r["feature_id"]) for r in rows]
+    counts = [r["count_active"] for r in rows]
+
+    fig, ax = plt.subplots(figsize=(12, 6), constrained_layout=True)
+    ax.bar(labels, counts, color="#2a9d8f", alpha=0.9)
+    ax.set_title("Top Features by Activity Count")
+    ax.set_xlabel("feature_id")
+    ax.set_ylabel("count_active")
+    ax.grid(axis="y", alpha=0.25)
+    ax.tick_params(axis="x", rotation=70)
+    fig.savefig(output_path, dpi=160)
+    plt.close(fig)
+
+
+def build_mapping_strength_histogram(events_rows, output_path: Path):
+    strengths = [_to_float(r.get("strength")) for r in events_rows]
+    strengths = [x for x in strengths if x > 0.0]
+    if not strengths:
+        return
+
+    fig, ax = plt.subplots(figsize=(10, 6), constrained_layout=True)
+    ax.hist(strengths, bins=60, color="#264653", alpha=0.9)
+    ax.set_title("Feature Strength Distribution")
+    ax.set_xlabel("strength")
+    ax.set_ylabel("frequency")
+    ax.grid(alpha=0.2)
+    fig.savefig(output_path, dpi=160)
+    plt.close(fig)
+
+
+def build_mapping_token_heatmap(token_pair_rows, output_path: Path, top_features=20, top_tokens=20):
+    if not token_pair_rows:
+        return
+
+    parsed = [
+        {
+            "feature_id": _to_int(r.get("feature_id")),
+            "token_str": str(r.get("token_str", "")),
+            "count": _to_int(r.get("count")),
+        }
+        for r in token_pair_rows
+    ]
+
+    feature_total = {}
+    token_total = {}
+    for row in parsed:
+        feature_total[row["feature_id"]] = feature_total.get(row["feature_id"], 0) + row["count"]
+        token_total[row["token_str"]] = token_total.get(row["token_str"], 0) + row["count"]
+
+    feature_ids = [
+        fid
+        for fid, _ in sorted(feature_total.items(), key=lambda kv: kv[1], reverse=True)[: max(1, int(top_features))]
+    ]
+    tokens = [
+        tok
+        for tok, _ in sorted(token_total.items(), key=lambda kv: kv[1], reverse=True)[: max(1, int(top_tokens))]
+    ]
+
+    if not feature_ids or not tokens:
+        return
+
+    feature_to_i = {fid: i for i, fid in enumerate(feature_ids)}
+    token_to_j = {tok: j for j, tok in enumerate(tokens)}
+
+    mat = np.zeros((len(feature_ids), len(tokens)), dtype=np.float32)
+    for row in parsed:
+        i = feature_to_i.get(row["feature_id"])
+        j = token_to_j.get(row["token_str"])
+        if i is not None and j is not None:
+            mat[i, j] += row["count"]
+
+    fig, ax = plt.subplots(figsize=(12, 8), constrained_layout=True)
+    image = ax.imshow(mat, aspect="auto", cmap="YlGnBu")
+    ax.set_title("Feature-Token Count Heatmap")
+    ax.set_xlabel("token_str")
+    ax.set_ylabel("feature_id")
+    ax.set_xticks(range(len(tokens)))
+    ax.set_xticklabels(tokens, rotation=75, ha="right", fontsize=8)
+    ax.set_yticks(range(len(feature_ids)))
+    ax.set_yticklabels([str(fid) for fid in feature_ids], fontsize=8)
+    fig.colorbar(image, ax=ax, label="count")
+    fig.savefig(output_path, dpi=160)
+    plt.close(fig)
+
+
+def build_mapping_sequence_timeline(events_rows, output_path: Path):
+    if not events_rows:
+        return
+
+    seq_counts = {}
+    for row in events_rows:
+        seq = _to_int(row.get("sequence_idx"), default=-1)
+        if seq >= 0:
+            seq_counts[seq] = seq_counts.get(seq, 0) + 1
+
+    if not seq_counts:
+        return
+
+    selected_seq = max(seq_counts.items(), key=lambda kv: kv[1])[0]
+    selected = [r for r in events_rows if _to_int(r.get("sequence_idx"), -1) == selected_seq]
+    if not selected:
+        return
+
+    x_vals = [_to_int(r.get("token_idx_in_sequence")) for r in selected]
+    y_vals = [_to_int(r.get("feature_id")) for r in selected]
+    sizes = [max(10.0, _to_float(r.get("strength")) * 12.0) for r in selected]
+
+    fig, ax = plt.subplots(figsize=(12, 6), constrained_layout=True)
+    ax.scatter(x_vals, y_vals, s=sizes, alpha=0.5, c="#e76f51")
+    ax.set_title(f"Feature Timeline for sequence_idx={selected_seq}")
+    ax.set_xlabel("token_idx_in_sequence")
+    ax.set_ylabel("feature_id")
+    ax.grid(alpha=0.2)
+    fig.savefig(output_path, dpi=160)
+    plt.close(fig)
+
+
+def run_training_reports(args, output_dir: Path):
     checkpoints_dir = Path(args.checkpoints_dir)
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
 
     paths = sorted(checkpoints_dir.glob(args.pattern))
     if not paths:
@@ -250,8 +433,54 @@ def main():
     build_lambda_tradeoff_chart(rows, output_dir / "lambda_tradeoff.png")
     build_epoch_metric_charts(runs, output_dir)
 
-    print(f"Generated reports in: {output_dir.resolve()}")
+    print(f"Generated training reports in: {output_dir.resolve()}")
     print(f"Runs included: {len(rows)}")
+
+
+def run_mapping_reports(args, output_dir: Path):
+    events_path = Path(args.mapping_events_csv)
+    summary_path = Path(args.mapping_summary_csv)
+    token_pairs_path = Path(args.mapping_token_pairs_csv)
+
+    events_rows = _read_csv_rows(events_path)
+    summary_rows = _read_csv_rows(summary_path)
+    token_pair_rows = _read_csv_rows(token_pairs_path)
+
+    build_mapping_feature_importance_chart(
+        summary_rows=summary_rows,
+        output_path=output_dir / "mapping_feature_importance.png",
+        top_n=args.top_features,
+    )
+    build_mapping_strength_histogram(
+        events_rows=events_rows,
+        output_path=output_dir / "mapping_strength_histogram.png",
+    )
+    build_mapping_token_heatmap(
+        token_pair_rows=token_pair_rows,
+        output_path=output_dir / "mapping_feature_token_heatmap.png",
+        top_features=min(args.top_features, 20),
+        top_tokens=20,
+    )
+    build_mapping_sequence_timeline(
+        events_rows=events_rows,
+        output_path=output_dir / "mapping_sequence_timeline.png",
+    )
+
+    print(f"Generated mapping reports in: {output_dir.resolve()}")
+    print(f"Events rows: {len(events_rows)}")
+    print(f"Feature summary rows: {len(summary_rows)}")
+
+
+def main():
+    args = parse_args()
+
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if args.mode == "training":
+        run_training_reports(args, output_dir)
+        return
+
+    run_mapping_reports(args, output_dir)
 
 
 if __name__ == "__main__":

@@ -40,7 +40,15 @@
   },
   "feature-mapping": {
       "model_path": "checkpoints/sae_k16_l1_0p02.pt",
-      "device": "cuda"
+      "device": "cuda",
+      "tokenizer_name": "gpt2",
+      "summary_output_path": "reports/feature_mapping/feature_mapping_summary.txt",
+      "event_output_path": "reports/feature_mapping/feature_mapping_events.csv",
+      "summary_csv_output_path": "reports/feature_mapping/feature_mapping_feature_summary.csv",
+      "top_k": 10,
+      "strength_threshold": 0.001,
+      "show_token_progress": true,
+      "count": 2000
     }
   
 }

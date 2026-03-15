@@ -31,6 +31,17 @@ python -m sae.mapping --config config.json
 python report_plots.py --mode mapping --output-dir reports/feature_mapping/viz
 ```
 
+Single-command pipeline:
+
+```bash
+python run_pipeline.py --config config.json
+```
+
+Useful flags:
+
+- `--skip-viz`: run extraction + training + mapping only
+- `--continue-on-error`: continue remaining steps even if one fails
+
 ## Main Outputs
 
 - `reports/feature_mapping/feature_mapping_events.csv`

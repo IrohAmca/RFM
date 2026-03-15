@@ -16,6 +16,8 @@ class BaseDataLoader:
         self.split = dataloader_config.get("split", "train")
         self.data_dir = dataloader_config.get("data_dir")
         self.streaming = bool(dataloader_config.get("streaming", True))
+        self.filter_field = dataloader_config.get("filter_field")
+        self.filter_values = dataloader_config.get("filter_values")
         self.dataset = None
 
     def _cfg_section(self, name):
@@ -51,7 +53,29 @@ class BaseDataLoader:
     def __iter__(self):
         if self.dataset is None:
             raise ValueError("Dataset not loaded. Call load() before iterating.")
-        return iter(self.dataset)
+        if not self.filter_field:
+            return iter(self.dataset)
+
+        allowed = self.filter_values
+        if allowed is None:
+            allowed_set = None
+        elif isinstance(allowed, list):
+            allowed_set = set(allowed)
+        else:
+            allowed_set = {allowed}
+
+        def _filtered_iter():
+            for row in self.dataset:
+                value = row.get(self.filter_field)
+                if allowed_set is None:
+                    if value is not None:
+                        yield row
+                    continue
+
+                if value in allowed_set:
+                    yield row
+
+        return _filtered_iter()
 
 
 class BaseDataset:

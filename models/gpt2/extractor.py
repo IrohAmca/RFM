@@ -51,3 +51,6 @@ class GPT2Extractor(BaseExtractor):
         self.model.reset_hooks()
 
         return self.saved[target]
+
+    def to_tokens(self, text):
+        return self.model.to_tokens(text)

@@ -17,8 +17,11 @@ DEFAULT_CONFIG = {
         "data_dir": None,
         "streaming": True,
         "text_field": "content",
+        "filter_field": None,
+        "filter_values": None,
     },
     "extraction": {
+        "extractor_backend": "transformer_lens",
         "target": "blocks.0.hook_resid_post",
         "count": 100,
         "chunk_size": 1_000_000,

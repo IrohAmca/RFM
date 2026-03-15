@@ -133,7 +133,7 @@ for i, text in enumerate(
         continue
 
     activations = extractor.extract(sample_text, target)
-    tokens = extractor.model.to_tokens(sample_text).squeeze(0)
+    tokens = extractor.to_tokens(sample_text).squeeze(0)
 
     acts_2d = activations.reshape(-1, activations.shape[-1]).to(activation_dtype).cpu()
     if acts_2d.shape[0] != tokens.shape[0]:

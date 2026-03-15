@@ -47,6 +47,7 @@
       "summary_csv_output_path": "reports/feature_mapping/feature_mapping_feature_summary.csv",
       "top_k": 10,
       "strength_threshold": 0.001,
+      "prompt_preview_chars": 180,
       "show_token_progress": true,
       "count": 2000
     }

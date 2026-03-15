@@ -22,6 +22,7 @@ class FeatureMapping:
         self.tokenizer_name = self._resolve_tokenizer_name()
         self._tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_name)
         self._token_cache = {}
+        self._sequence_cache = {}
 
     def _resolve_tokenizer_name(self):
         mapping_cfg = self._cfg_section("feature-mapping")
@@ -59,12 +60,39 @@ class FeatureMapping:
         self._token_cache[token_id] = token_str
         return token_str
 
+    def _decode_token_for_csv(self, token_id):
+        # Escaped representation is easier to read in CSV than raw GPT-2 bytes/spaces.
+        return repr(self._decode_token(token_id))
+
+    def _decode_sequence_preview(self, token_ids, max_chars):
+        cache_key = tuple(int(t) for t in token_ids)
+        cached = self._sequence_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        text = self._tokenizer.decode(list(cache_key), clean_up_tokenization_spaces=False)
+        if len(text) > max_chars:
+            text = text[:max_chars] + "..."
+        text = text.replace("\n", "\\n").replace("\t", "\\t")
+        self._sequence_cache[cache_key] = text
+        return text
+
     def _iter_activation_token_rows(self):
-        sample_idx = 0
+        global_token_idx = 0
+        global_sequence_idx = 0
+        mapping_cfg = self._cfg_section("feature-mapping")
+        max_prompt_preview_chars = int(mapping_cfg.get("prompt_preview_chars", 180))
+        default_layer = self._cfg_value("extraction.target", "")
+
         for data_path in self._dataset_paths():
             payload = torch.load(data_path, map_location="cpu")
             activations = payload.get("activations")
             tokens = payload.get("tokens")
+            metadata = payload.get("metadata", {}) if isinstance(payload, dict) else {}
+            token_lengths = metadata.get("token_lengths", []) if isinstance(metadata, dict) else []
+            target_layer = metadata.get("target_layer", default_layer) if isinstance(metadata, dict) else default_layer
+            chunk_id = metadata.get("chunk_id") if isinstance(metadata, dict) else None
+
             if activations is None or tokens is None:
                 raise ValueError(f"Chunk {data_path} must contain both 'activations' and 'tokens'.")
 
@@ -73,14 +101,57 @@ class FeatureMapping:
                     f"Row/token mismatch in {data_path}: activations={activations.shape[0]} tokens={tokens.shape[0]}"
                 )
 
-            for row_idx in range(int(activations.shape[0])):
-                yield {
-                    "sample_idx": sample_idx,
-                    "token_idx_in_chunk": row_idx,
-                    "activation": activations[row_idx],
-                    "token_id": int(tokens[row_idx].item()),
-                }
-                sample_idx += 1
+            total_rows = int(activations.shape[0])
+
+            # Prefer sequence-aware iteration when token_lengths metadata is present.
+            if token_lengths and sum(int(x) for x in token_lengths) == total_rows:
+                start = 0
+                for seq_local_idx, seq_len in enumerate(token_lengths):
+                    seq_len = int(seq_len)
+                    end = start + seq_len
+                    seq_token_ids = [int(t.item()) for t in tokens[start:end]]
+                    prompt_preview = self._decode_sequence_preview(
+                        token_ids=seq_token_ids,
+                        max_chars=max_prompt_preview_chars,
+                    )
+
+                    for token_idx_in_sequence in range(seq_len):
+                        row_idx = start + token_idx_in_sequence
+                        yield {
+                            "sample_idx": global_token_idx,
+                            "sequence_idx": global_sequence_idx,
+                            "token_idx_in_sequence": token_idx_in_sequence,
+                            "token_idx_in_chunk": row_idx,
+                            "activation": activations[row_idx],
+                            "token_id": int(tokens[row_idx].item()),
+                            "prompt_preview": prompt_preview,
+                            "target_layer": target_layer,
+                            "chunk_path": data_path,
+                            "chunk_id": chunk_id,
+                            "sequence_local_idx": seq_local_idx,
+                        }
+                        global_token_idx += 1
+
+                    start = end
+                    global_sequence_idx += 1
+            else:
+                for row_idx in range(total_rows):
+                    token_id = int(tokens[row_idx].item())
+                    yield {
+                        "sample_idx": global_token_idx,
+                        "sequence_idx": global_sequence_idx,
+                        "token_idx_in_sequence": row_idx,
+                        "token_idx_in_chunk": row_idx,
+                        "activation": activations[row_idx],
+                        "token_id": token_id,
+                        "prompt_preview": self._decode_sequence_preview([token_id], max_prompt_preview_chars),
+                        "target_layer": target_layer,
+                        "chunk_path": data_path,
+                        "chunk_id": chunk_id,
+                        "sequence_local_idx": 0,
+                    }
+                    global_token_idx += 1
+                global_sequence_idx += 1
 
     def get_model_config(self, model_path):
         base_config = torch.load(model_path, map_location="cpu").get("config", {})
@@ -136,9 +207,16 @@ class FeatureMapping:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         fieldnames = [
             "sample_idx",
+            "sequence_idx",
+            "sequence_local_idx",
             "token_idx_in_chunk",
+            "token_idx_in_sequence",
             "token_id",
             "token_str",
+            "prompt_preview",
+            "target_layer",
+            "chunk_id",
+            "chunk_path",
             "feature_id",
             "strength",
             "rank",
@@ -191,10 +269,50 @@ class FeatureMapping:
             writer.writeheader()
             writer.writerows(rows)
 
+        # Cleaner aggregate view: one row per (feature, token) pair.
+        token_pair_path = output_csv.with_name(output_csv.stem + "_token_pairs.csv")
+        pair_rows = []
+        pair_counter = defaultdict(Counter)
+        pair_strength_sum = defaultdict(lambda: defaultdict(float))
+        pair_strength_max = defaultdict(lambda: defaultdict(float))
+
+        for event in events:
+            feature_id = int(event["feature_id"])
+            token = event["token_str"]
+            strength = float(event["strength"])
+            pair_counter[feature_id][token] += 1
+            pair_strength_sum[feature_id][token] += strength
+            pair_strength_max[feature_id][token] = max(pair_strength_max[feature_id][token], strength)
+
+        for feature_id in sorted(pair_counter.keys()):
+            for token, cnt in pair_counter[feature_id].most_common(30):
+                pair_rows.append(
+                    {
+                        "feature_id": feature_id,
+                        "token_str": token,
+                        "count": int(cnt),
+                        "mean_strength": float(pair_strength_sum[feature_id][token] / max(cnt, 1)),
+                        "max_strength": float(pair_strength_max[feature_id][token]),
+                    }
+                )
+
+        with token_pair_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=["feature_id", "token_str", "count", "mean_strength", "max_strength"],
+            )
+            writer.writeheader()
+            writer.writerows(pair_rows)
+
         summary_lines = [
+            f"Model: {self.model_name}",
+            f"Tokenizer: {self.tokenizer_name}",
+            f"Target layer: {events[0]['target_layer'] if events else ''}",
             f"Total samples: {len(set(e['sample_idx'] for e in events)) if events else 0}",
+            f"Total sequences: {len(set(e['sequence_idx'] for e in events)) if events else 0}",
             f"Total events: {len(events)}",
             f"Unique active features: {len(feature_values)}",
+            f"Token-pair csv: {token_pair_path}",
         ]
         if rows:
             top_rows = sorted(rows, key=lambda r: r["count_active"], reverse=True)[:20]
@@ -261,9 +379,16 @@ class FeatureMapping:
                     events.append(
                         {
                             "sample_idx": sample_idx,
+                            "sequence_idx": int(row["sequence_idx"]),
+                            "sequence_local_idx": int(row["sequence_local_idx"]),
                             "token_idx_in_chunk": int(row["token_idx_in_chunk"]),
+                            "token_idx_in_sequence": int(row["token_idx_in_sequence"]),
                             "token_id": token_id,
-                            "token_str": self._decode_token(token_id),
+                            "token_str": self._decode_token_for_csv(token_id),
+                            "prompt_preview": row["prompt_preview"],
+                            "target_layer": row["target_layer"],
+                            "chunk_id": row["chunk_id"],
+                            "chunk_path": row["chunk_path"],
                             "feature_id": int(feature_id),
                             "strength": float(strength),
                             "rank": rank,

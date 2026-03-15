@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from datasets import load_dataset
 import torch
+from datasets import load_dataset
 from torch.utils.data import DataLoader, TensorDataset
 
 
@@ -12,8 +12,9 @@ class BaseDataLoader:
         self.dataset_name = dataloader_config.get(
             "dataset_name", "bigcode/the-stack-smol"
         )
+        self.dataset_config_name = dataloader_config.get("dataset_config_name")
         self.split = dataloader_config.get("split", "train")
-        self.data_dir = dataloader_config.get("data_dir", "data/python")
+        self.data_dir = dataloader_config.get("data_dir")
         self.streaming = bool(dataloader_config.get("streaming", True))
         self.dataset = None
 
@@ -25,12 +26,22 @@ class BaseDataLoader:
         return {}
 
     def load(self):
-        self.dataset = load_dataset(
-            self.dataset_name,
-            split=self.split,
-            data_dir=self.data_dir,
-            streaming=self.streaming,
-        )
+        kwargs = {
+            "split": self.split,
+            "streaming": self.streaming,
+        }
+        if self.data_dir:
+            kwargs["data_dir"] = self.data_dir
+
+        if self.dataset_config_name:
+            self.dataset = load_dataset(
+                self.dataset_name,
+                self.dataset_config_name,
+                **kwargs,
+            )
+            return
+
+        self.dataset = load_dataset(self.dataset_name, **kwargs)
 
     def get_data(self):
         if self.dataset is None:

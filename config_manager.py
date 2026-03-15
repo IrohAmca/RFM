@@ -4,7 +4,6 @@ import copy
 import json
 from pathlib import Path
 
-
 DEFAULT_CONFIG = {
     "model_name": "gpt2-small",
     "model": {
@@ -13,8 +12,9 @@ DEFAULT_CONFIG = {
     },
     "dataloader": {
         "dataset_name": "bigcode/the-stack-smol",
+        "dataset_config_name": None,
         "split": "train",
-        "data_dir": "data/python",
+        "data_dir": None,
         "streaming": True,
         "text_field": "content",
     },

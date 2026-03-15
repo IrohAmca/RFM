@@ -1,25 +1,24 @@
 {
   "model_name": "gpt2-small",
   "dataloader": {
-    "dataset_name": "bigcode/the-stack-smol",
+    "dataset_name": "dair-ai/emotion",
+    "dataset_config_name": null,
     "split": "train",
-    "data_dir": "data/python",
-    "streaming": true,
-    "text_field": "content"
+    "data_dir": null,
+    "streaming": false,
+    "text_field": "text"
   },
   "extraction": {
     "target": "blocks.0.hook_resid_post",
-    "count": 1000,
+    "count": 800,
     "chunk_size": 250000,
     "dtype": "bfloat16",
     "output_dir": ".",
-    "output_prefix": "activations"
+    "output_prefix": "activations_emotion"
   },
   "datasets": {
     "path": [
-      "activations_gpt2-small_blocks_0_hook_resid_post_0.pt",
-      "activations_gpt2-small_blocks_0_hook_resid_post_1.pt",
-      "activations_gpt2-small_blocks_0_hook_resid_post_2.pt"
+      "activations_emotion_gpt2-small_blocks_0_hook_resid_post_0.pt"
     ]
   },
   "sae": {

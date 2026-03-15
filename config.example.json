@@ -1,0 +1,35 @@
+{
+  "model_name": "gpt2-small",
+  "dataloader": {
+    "dataset_name": "bigcode/the-stack-smol",
+    "split": "train",
+    "data_dir": "data/python",
+    "streaming": true,
+    "text_field": "content"
+  },
+  "extraction": {
+    "target": "blocks.0.hook_resid_post",
+    "count": 100,
+    "chunk_size": 1000000,
+    "dtype": "bfloat16",
+    "output_dir": ".",
+    "output_prefix": "activations"
+  },
+  "datasets": {
+    "path": [
+      "activations_gpt2-small_blocks_0_hook_resid_post_0.pt"
+    ]
+  },
+  "sae": {
+    "hidden_dim": 3072,
+    "sparsity_weight": 0.001
+  },
+  "train": {
+    "batch_size": 1024,
+    "epochs": 1,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0,
+    "device": "cpu",
+    "output_model_path": "checkpoints/sae.pt"
+  }
+}

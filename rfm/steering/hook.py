@@ -153,5 +153,73 @@ class MultiSteeringHook:
                     alpha=cfg.get("alpha", 1.0),
                     mode=cfg.get("mode", "add"),
                 )
-            )
+                )
         return cls(hooks)
+
+
+class HFSteeringHook(SteeringHook):
+    """Universal HuggingFace native steering hook using PyTorch register_forward_hook.
+    
+    This circumvents TransformerLens and directly patches the HF nn.Module output,
+    so it is compatible with custom architectures, arbitrary vocab sizes, and models 
+    like Qwen, Llama, or custom GPT2 variants (e.g. ytu-ce-cosmos).
+    """
+    
+    def hook_fn(self, module, inputs, output):
+        """Standard PyTorch forward hook signature."""
+        # HF models often return a tuple (hidden_states, presents, ...)
+        is_tuple = isinstance(output, tuple)
+        act = output[0] if is_tuple else output
+        
+        direction = self.direction.to(act.device, act.dtype)
+
+        if self.mode == "add":
+            steered_act = act + self.alpha * direction
+
+        elif self.mode == "ablate":
+            d_hat = direction / direction.norm().clamp(min=1e-12)
+            proj = (act * d_hat).sum(dim=-1, keepdim=True) * d_hat
+            steered_act = act - proj
+
+        elif self.mode == "clamp":
+            steered_act = self._clamp_feature(act, direction)
+
+        else:
+            steered_act = act
+            
+        return (steered_act,) + output[1:] if is_tuple else steered_act
+
+    @classmethod
+    def apply(cls, hf_model, target_layer, sae_model, feature_id, alpha=1.0, mode="add"):
+        """Attach to a specific HuggingFace sub-module.
+        
+        Args:
+            hf_model: Raw HuggingFace PreTrainedModel.
+            target_layer: The string name of the module to hook (e.g., 'transformer.h.11').
+            sae_model: Trained SAE.
+            feature_id: Feature index to steer.
+            alpha: Steering strength.
+            mode: 'add', 'ablate', or 'clamp'.
+            
+        Returns:
+            RemovableHandle to allow detachment.
+        """
+        hook = cls(sae_model, feature_id, alpha=alpha, mode=mode)
+        
+        # Traverse the model to find the specific nn.Module
+        target_module = hf_model
+        for part in target_layer.split('.'):
+            # Try to handle typical TransformerLens->HF mapping ('blocks.11' -> 'transformer.h.11')
+            if part == 'blocks': part = 'transformer'
+            elif part == 'hook_resid_post': continue
+            
+            if hasattr(target_module, part):
+                target_module = getattr(target_module, part)
+            elif part == 'transformer' and hasattr(target_module, 'model'): # Llama fallback
+                target_module = getattr(target_module, 'model')
+            elif hasattr(target_module, 'h'): # typical GPT2 
+                target_module = getattr(target_module, 'h')
+                
+        # Register the raw PyTorch hook
+        handle = target_module.register_forward_hook(hook.hook_fn)
+        return handle

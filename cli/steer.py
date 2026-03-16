@@ -5,12 +5,10 @@ import sys
 from pathlib import Path
 
 import torch
-from transformer_lens import HookedTransformer
 
 from rfm.config import ConfigManager
 from rfm.layout import default_checkpoint_path, default_feature_mapping_dir
 from rfm.sae.model import SparseAutoEncoder
-from rfm.steering.hook import SteeringHook
 from rfm.steering.patching import activation_patch, batch_feature_patching
 from rfm.steering.emotion_probe import EmotionProbe
 
@@ -62,18 +60,11 @@ def _load_model_and_sae(config, target):
     model_name = config.get("model_name", "gpt2-small")
     device = config.get("train.device", "cuda" if torch.cuda.is_available() else "cpu")
 
-    try:
-        model = HookedTransformer.from_pretrained(model_name)
-    except ValueError:
-        # Fallback for unofficial models (like turkish-gpt2 which has GPT-2 architecture)
-        from transformers import AutoModelForCausalLM, AutoTokenizer
-        print(f"[steer] Loading {model_name} via HuggingFace fallback...")
-        hf_model = AutoModelForCausalLM.from_pretrained(model_name)
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        # We assume it approximates a 'gpt2' architecture for testing, but ideally we'd infer it
-        model = HookedTransformer.from_pretrained("gpt2", hf_model=hf_model, tokenizer=tokenizer)
-        
-    model.to(device)
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    # Always load raw HuggingFace for steering to avoid TransformerLens type issues
+    print(f"[steer] Loading {model_name} via HuggingFace AutoModelForCausalLM...")
+    hf_model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     mapping_cfg = config.section("feature-mapping") if hasattr(config, "section") else {}
     sae_path = mapping_cfg.get("model_path")
@@ -103,7 +94,7 @@ def _load_model_and_sae(config, target):
     sae_model.to(device)
     sae_model.eval()
 
-    return model, sae_model
+    return hf_model, tokenizer, sae_model
 
 
 def cmd_discover(args):
@@ -145,22 +136,26 @@ def cmd_discover(args):
 
 def cmd_steer(args):
     config = ConfigManager.from_file(args.config)
-    model, sae_model = _load_model_and_sae(config, args.layer)
+    hf_model, tokenizer, sae_model = _load_model_and_sae(config, args.layer)
+    from rfm.steering.hook import HFSteeringHook
+
+    device = sae_model.W_dec.device
+    inputs = tokenizer(args.prompt, return_tensors="pt").to(device)
 
     print("\n--- Clean Output ---")
-    clean_out = model.generate(args.prompt, max_new_tokens=args.max_tokens, temperature=0.7)
-    if isinstance(clean_out, torch.Tensor):
-        clean_out = model.to_string(clean_out[0])
-    print(clean_out)
+    with torch.no_grad():
+        clean_out = hf_model.generate(**inputs, max_new_tokens=args.max_tokens, temperature=0.7, do_sample=True)
+    print(tokenizer.decode(clean_out[0], skip_special_tokens=True))
 
     print(f"\n--- Steered (feature={args.feature_id}, alpha={args.alpha}, mode={args.mode}) ---")
-    SteeringHook.apply(model=model, target_layer=args.layer, sae_model=sae_model,
-                       feature_id=args.feature_id, alpha=args.alpha, mode=args.mode)
-    steered_out = model.generate(args.prompt, max_new_tokens=args.max_tokens, temperature=0.7)
-    if isinstance(steered_out, torch.Tensor):
-        steered_out = model.to_string(steered_out[0])
-    print(steered_out)
-    model.reset_hooks()
+    hook_handle = HFSteeringHook.apply(hf_model=hf_model, target_layer=args.layer, sae_model=sae_model,
+                                       feature_id=args.feature_id, alpha=args.alpha, mode=args.mode)
+    with torch.no_grad():
+        steered_out = hf_model.generate(**inputs, max_new_tokens=args.max_tokens, temperature=0.7, do_sample=True)
+    print(tokenizer.decode(steered_out[0], skip_special_tokens=True))
+    
+    # Remove the PyTorch hook after steering
+    hook_handle.remove()
 
 
 def cmd_patch(args):
@@ -183,7 +178,6 @@ def cmd_patch(args):
 
 
 def main():
-    import sys
     if sys.stdout.encoding != 'utf-8' and hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8')
         

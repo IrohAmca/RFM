@@ -21,15 +21,10 @@ def _run_sweep(config):
     sweep_lambdas = sae_section.get("sparsity_sweep")
 
     activation_dir = config.get("datasets.path")
-    if activation_dir is None:
-        act_dir = default_activations_dir(config)
-        pt_files = sorted(Path(act_dir).glob("*.pt"))
-        if pt_files:
-            config.set("datasets.path", [str(p) for p in pt_files])
-        else:
-            raise FileNotFoundError(f"No activation files found in {act_dir}")
+    if not activation_dir:
+        raise FileNotFoundError(f"Datasets path not set. Must be injected via main().")
 
-    save_path = config.get("train.save_path") or default_checkpoint_path(config)
+    save_path = config.get("train.save_path")
 
     if sweep_lambdas:
         for lam in sweep_lambdas:
@@ -58,10 +53,39 @@ def _run_sweep(config):
         print(f"[train] Saved → {save_path}")
 
 
+def _resolve_targets(config):
+    raw = config.get("extraction.target")
+    if isinstance(raw, list):
+        return raw
+    return [raw]
+
+
 def main():
     args = parse_args()
-    config = ConfigManager.from_file(args.config)
-    _run_sweep(config)
+    base_config = ConfigManager.from_file(args.config)
+    targets = _resolve_targets(base_config)
+    
+    for target in targets:
+        print(f"\n{'#'*60}")
+        print(f"[train] Starting SAE training for target: {target}")
+        print(f"{'#'*60}")
+        
+        config = ConfigManager.from_file(args.config)
+        config.set("extraction.target", target)
+        
+        # Resolve target-specific paths using base_config so multi-layer status is preserved
+        act_dir = default_activations_dir(base_config, target=target)
+        pt_files = sorted(Path(act_dir).glob("*.pt"))
+        if not pt_files:
+            raise FileNotFoundError(f"No activation files found in {act_dir}")
+        config.set("datasets.path", [str(p) for p in pt_files])
+        
+        save_path = config.get("train.save_path")
+        if not save_path:
+            save_path = default_checkpoint_path(base_config, target=target)
+            config.set("train.save_path", save_path)
+        
+        _run_sweep(config)
 
 
 if __name__ == "__main__":

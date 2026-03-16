@@ -49,15 +49,49 @@ def parse_args():
     return parser.parse_args()
 
 
-def _load_model_and_sae(config):
+def _resolve_targets(config):
+    raw = config.get("extraction.target")
+    if isinstance(raw, list):
+        return raw
+    if raw:
+        return [raw]
+    return ["blocks.0.hook_resid_post"]
+
+
+def _load_model_and_sae(config, target):
     model_name = config.get("model_name", "gpt2-small")
     device = config.get("train.device", "cuda" if torch.cuda.is_available() else "cpu")
 
-    model = HookedTransformer.from_pretrained(model_name)
+    try:
+        model = HookedTransformer.from_pretrained(model_name)
+    except ValueError:
+        # Fallback for unofficial models (like turkish-gpt2 which has GPT-2 architecture)
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        print(f"[steer] Loading {model_name} via HuggingFace fallback...")
+        hf_model = AutoModelForCausalLM.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        # We assume it approximates a 'gpt2' architecture for testing, but ideally we'd infer it
+        model = HookedTransformer.from_pretrained("gpt2", hf_model=hf_model, tokenizer=tokenizer)
+        
     model.to(device)
 
     mapping_cfg = config.section("feature-mapping") if hasattr(config, "section") else {}
-    sae_path = mapping_cfg.get("model_path") or default_checkpoint_path(config)
+    sae_path = mapping_cfg.get("model_path")
+    if not sae_path:
+        default_path = Path(default_checkpoint_path(config, target=target))
+        if default_path.exists():
+            sae_path = str(default_path)
+        else:
+            sweep_val = config.get("sae.sparsity_weight", 0.005)
+            sweep_path = default_path.parent / f"sae_lambda_{sweep_val}.pt"
+            if sweep_path.exists():
+                sae_path = str(sweep_path)
+            else:
+                available = list(default_path.parent.glob("sae_lambda_*.pt"))
+                if available:
+                    sae_path = str(available[0])
+                else:
+                    sae_path = str(default_path)
 
     checkpoint = torch.load(sae_path, map_location="cpu", weights_only=False)
     sae_config = checkpoint.get("config", {}).get("sae", {})
@@ -74,9 +108,15 @@ def _load_model_and_sae(config):
 
 def cmd_discover(args):
     config = ConfigManager.from_file(args.config)
+    
+    target = args.layer
+    if not target:
+        targets = _resolve_targets(config)
+        target = targets[0] if targets else "blocks.0.hook_resid_post"
+        
     events_csv = args.events_csv
     if not events_csv:
-        mapping_dir = default_feature_mapping_dir(config)
+        mapping_dir = default_feature_mapping_dir(config, target=target)
         events_csv = str(Path(mapping_dir) / "feature_mapping_events.csv")
 
     probe = EmotionProbe(events_csv)
@@ -105,29 +145,33 @@ def cmd_discover(args):
 
 def cmd_steer(args):
     config = ConfigManager.from_file(args.config)
-    model, sae_model = _load_model_and_sae(config)
+    model, sae_model = _load_model_and_sae(config, args.layer)
 
-    print(f"\n--- Clean Output ---")
-    clean_tokens = model.generate(args.prompt, max_new_tokens=args.max_tokens, temperature=0.7)
-    print(model.to_string(clean_tokens[0]))
+    print("\n--- Clean Output ---")
+    clean_out = model.generate(args.prompt, max_new_tokens=args.max_tokens, temperature=0.7)
+    if isinstance(clean_out, torch.Tensor):
+        clean_out = model.to_string(clean_out[0])
+    print(clean_out)
 
     print(f"\n--- Steered (feature={args.feature_id}, alpha={args.alpha}, mode={args.mode}) ---")
     SteeringHook.apply(model=model, target_layer=args.layer, sae_model=sae_model,
                        feature_id=args.feature_id, alpha=args.alpha, mode=args.mode)
-    steered_tokens = model.generate(args.prompt, max_new_tokens=args.max_tokens, temperature=0.7)
-    print(model.to_string(steered_tokens[0]))
+    steered_out = model.generate(args.prompt, max_new_tokens=args.max_tokens, temperature=0.7)
+    if isinstance(steered_out, torch.Tensor):
+        steered_out = model.to_string(steered_out[0])
+    print(steered_out)
     model.reset_hooks()
 
 
 def cmd_patch(args):
     config = ConfigManager.from_file(args.config)
-    model, sae_model = _load_model_and_sae(config)
+    model, sae_model = _load_model_and_sae(config, args.layer)
 
     if args.feature_id is not None:
         result = activation_patch(model=model, sae_model=sae_model, clean_text=args.clean,
                                   patch_text=args.patch, target_layer=args.layer,
                                   feature_id=args.feature_id, metric=args.metric)
-        print(f"\n--- Patching Result ---")
+        print("\n--- Patching Result ---")
         print(f"  Feature: {result['feature_id']}  Effect: {result['effect']:.6f}")
     else:
         results = batch_feature_patching(model=model, sae_model=sae_model, clean_text=args.clean,
@@ -139,6 +183,10 @@ def cmd_patch(args):
 
 
 def main():
+    import sys
+    if sys.stdout.encoding != 'utf-8' and hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+        
     args = parse_args()
     if args.command is None:
         print("Commands: discover, steer, patch. Use --help.")

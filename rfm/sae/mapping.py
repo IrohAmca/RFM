@@ -44,8 +44,15 @@ class FeatureMapping:
         paths = self._cfg_section("datasets").get("path", [])
         if isinstance(paths, str):
             paths = [paths]
+        if not paths:
+            from rfm.layout import default_activations_dir
+            act_dir = default_activations_dir(self.config)
+            pt_files = sorted(Path(act_dir).glob("*.pt"))
+            paths = [str(p) for p in pt_files]
+            
         if not isinstance(paths, list) or not paths:
-            raise ValueError("config.datasets.path must be a non-empty string or list.")
+            act_dir = default_activations_dir(self.config)
+            raise ValueError(f"Could not find activation files in {act_dir} or config.datasets.path")
         return paths
 
     def _decode_token(self, token_id):
@@ -353,11 +360,61 @@ class FeatureMapping:
         print(f"Run summary written to {summary_txt_path}")
 
 
+def _resolve_targets(config):
+    raw = config.get("extraction.target")
+    if isinstance(raw, list):
+        return raw
+    return [raw]
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run feature mapping with SAE.")
     parser.add_argument("--config", type=str, required=True, help="Path to config file.")
     args = parser.parse_args()
 
-    config = ConfigManager.from_file(args.config)
-    mapping = FeatureMapping(config)
-    mapping.run()
+    base_config = ConfigManager.from_file(args.config)
+    targets = _resolve_targets(base_config)
+    
+    for target in targets:
+        print(f"\n{'#'*60}")
+        print(f"[mapping] Processing target layer: {target}")
+        print(f"{'#'*60}")
+        
+        config = ConfigManager.from_file(args.config)
+        config.set("extraction.target", target)
+        
+        from rfm.layout import default_activations_dir, default_checkpoint_path, default_feature_mapping_dir
+        from pathlib import Path
+        
+        act_dir = default_activations_dir(base_config, target=target)
+        pt_files = sorted(Path(act_dir).glob("*.pt"))
+        if pt_files:
+            config.set("datasets.path", [str(p) for p in pt_files])
+            
+        if not config.get("feature-mapping.model_path"):
+            default_path = Path(default_checkpoint_path(base_config, target=target))
+            if default_path.exists():
+                config.set("feature-mapping.model_path", str(default_path))
+            else:
+                sweep_val = config.get("sae.sparsity_weight", 0.005)
+                sweep_path = default_path.parent / f"sae_lambda_{sweep_val}.pt"
+                if sweep_path.exists():
+                    config.set("feature-mapping.model_path", str(sweep_path))
+                else:
+                    available = list(default_path.parent.glob("sae_lambda_*.pt"))
+                    if available:
+                        config.set("feature-mapping.model_path", str(available[0]))
+                        print(f"[mapping] Warning: sae.pt not found. Using {available[0].name}")
+                    else:
+                        config.set("feature-mapping.model_path", str(default_path))
+            
+        base_mapping_dir = Path(default_feature_mapping_dir(base_config, target=target))
+        if not config.get("feature-mapping.event_output_path"):
+            config.set("feature-mapping.event_output_path", str(base_mapping_dir / "feature_mapping_events.csv"))
+        if not config.get("feature-mapping.summary_output_path"):
+            config.set("feature-mapping.summary_output_path", str(base_mapping_dir / "feature_mapping_summary.txt"))
+        if not config.get("feature-mapping.summary_csv_output_path"):
+            config.set("feature-mapping.summary_csv_output_path", str(base_mapping_dir / "feature_mapping_feature_summary.csv"))
+        
+        mapping = FeatureMapping(config)
+        mapping.run()

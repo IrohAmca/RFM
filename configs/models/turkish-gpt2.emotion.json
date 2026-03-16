@@ -23,25 +23,15 @@
     ],
     "count": 5000,
     "chunk_size": 1000000,
-    "dtype": "bfloat16",
-    "output_dir": "runs/turkish-gpt2/activations",
-    "output_prefix": "activations"
-  },
-  "datasets": {
-    "path": [
-      "runs/turkish-gpt2/activations/activations_ytu-ce-cosmos_turkish-gpt2_blocks_0_hook_resid_post_0.pt"
-    ]
+    "dtype": "bfloat16"
   },
   "sae": {
     "hidden_dim": 12288,
     "sparsity_weight": 0.005,
     "sparsity_sweep": [
       0.0005,
-      0.001,
       0.002,
-      0.003,
       0.005,
-      0.008,
       0.01,
       0.02
     ]
@@ -54,16 +44,11 @@
     "device": "cuda",
     "validation_split": 0.1,
     "split_seed": 42,
-    "feature_activity_threshold": 0.001,
-    "output_model_path": "runs/turkish-gpt2/checkpoints/sae.pt"
+    "feature_activity_threshold": 0.001
   },
   "feature-mapping": {
-    "model_path": "runs/turkish-gpt2/checkpoints/sae_l1_0p005.pt",
     "device": "cuda",
     "tokenizer_name": "ytu-ce-cosmos/turkish-gpt2",
-    "summary_output_path": "runs/turkish-gpt2/reports/feature_mapping/feature_mapping_summary.txt",
-    "event_output_path": "runs/turkish-gpt2/reports/feature_mapping/feature_mapping_events.csv",
-    "summary_csv_output_path": "runs/turkish-gpt2/reports/feature_mapping/feature_mapping_feature_summary.csv",
     "top_k": 10,
     "strength_threshold": 0.001,
     "prompt_preview_chars": 180,

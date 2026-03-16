@@ -94,18 +94,19 @@ class BaseDataset:
     def _resolve_paths(self):
         dataset_config = self._cfg_section("datasets")
         path_cfg = dataset_config.get("path")
-        if path_cfg is None:
-            raise ValueError("config['datasets']['path'] must be set.")
 
         if isinstance(path_cfg, str):
             return [path_cfg]
-        if isinstance(path_cfg, list):
-            if not path_cfg:
-                raise ValueError("config['datasets']['path'] list cannot be empty.")
+        if isinstance(path_cfg, list) and path_cfg:
             return path_cfg
-        raise ValueError(
-            "config['datasets']['path'] must be a string or list of strings."
-        )
+            
+        from rfm.layout import default_activations_dir
+        act_dir = default_activations_dir(self.config)
+        from pathlib import Path
+        pt_files = sorted(Path(act_dir).glob("*.pt"))
+        if not pt_files:
+            raise ValueError(f"config.datasets.path is empty and no activation files found in {act_dir}")
+        return [str(p) for p in pt_files]
 
     def load(self):
         paths = self._resolve_paths()

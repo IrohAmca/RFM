@@ -10,7 +10,7 @@ from tqdm import tqdm
 from rfm.config import ConfigManager
 from rfm.extractors import ExtractorFactory
 from rfm.data import BaseDataLoader
-from rfm.layout import default_activations_dir, sanitize_layer_name
+from rfm.layout import default_activations_dir, sanitize_layer_name, sanitize_model_name
 
 
 def resolve_dtype(name):
@@ -35,7 +35,7 @@ def flush_chunk(buffer_acts, buffer_tks, buffer_lens, target, model_name, chunk_
     combined_acts = torch.cat(buffer_acts, dim=0)
     combined_tks = torch.cat(buffer_tks, dim=0)
 
-    filename = f"{output_prefix}_{model_name}_{target.replace('.', '_')}_{chunk_index}.pt"
+    filename = f"{output_prefix}_{sanitize_model_name(model_name)}_{target.replace('.', '_')}_{chunk_index}.pt"
     save_path = Path(output_dir) / filename
 
     torch.save(

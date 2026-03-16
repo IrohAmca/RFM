@@ -1,5 +1,5 @@
-from sae.model import SparseAutoEncoder
-from base.dataloader import BaseDataset
+from rfm.sae.model import SparseAutoEncoder
+from rfm.data.loader import BaseDataset
 import torch
 from tqdm import tqdm
 from torch.utils.data import DataLoader, TensorDataset
@@ -69,7 +69,6 @@ def _evaluate(model, loader, device, active_threshold):
         x = x.to(device)
         x_hat, f = model(x)
         total_loss, recon_loss, sparsity_loss = model.compute_loss(x, x_hat, f)
-
         active_rate = (f > active_threshold).float().mean()
 
         total_loss_sum += total_loss.item()
@@ -118,7 +117,6 @@ def train(config):
         sparsity_weight=sparsity_weight,
     ).to(device)
 
-    # Initialize pre-bias with the activation mean for centering.
     model.set_pre_bias(dataset.get_mean_activation().to(device))
 
     optimizer = torch.optim.AdamW(
@@ -244,4 +242,3 @@ def _dead_feature_analysis(model, loader, device, threshold):
         "dead_ratio": dead_count / max(hidden_dim, 1),
         "dead_feature_ids": torch.nonzero(~ever_active, as_tuple=False).flatten().cpu().tolist(),
     }
-

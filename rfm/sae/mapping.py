@@ -7,9 +7,9 @@ import torch
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
-from config_manager import ConfigManager
-from project_layout import default_checkpoint_path, default_feature_mapping_dir
-from sae.model import SparseAutoEncoder
+from rfm.config import ConfigManager
+from rfm.layout import default_checkpoint_path, default_feature_mapping_dir
+from rfm.sae.model import SparseAutoEncoder
 
 
 class FeatureMapping:
@@ -30,10 +30,7 @@ class FeatureMapping:
         explicit_name = mapping_cfg.get("tokenizer_name")
         if explicit_name:
             return explicit_name
-
-        alias_map = {
-            "gpt2-small": "gpt2",
-        }
+        alias_map = {"gpt2-small": "gpt2"}
         return alias_map.get(self.model_name, self.model_name)
 
     def _cfg_value(self, key, default=None):
@@ -56,13 +53,11 @@ class FeatureMapping:
         cached = self._token_cache.get(token_id)
         if cached is not None:
             return cached
-
         token_str = self._tokenizer.decode([token_id], clean_up_tokenization_spaces=False)
         self._token_cache[token_id] = token_str
         return token_str
 
     def _decode_token_for_csv(self, token_id):
-        # Escaped representation is easier to read in CSV than raw GPT-2 bytes/spaces.
         return repr(self._decode_token(token_id))
 
     def _decode_sequence_preview(self, token_ids, max_chars):
@@ -70,7 +65,6 @@ class FeatureMapping:
         cached = self._sequence_cache.get(cache_key)
         if cached is not None:
             return cached
-
         text = self._tokenizer.decode(list(cache_key), clean_up_tokenization_spaces=False)
         if len(text) > max_chars:
             text = text[:max_chars] + "..."
@@ -104,7 +98,6 @@ class FeatureMapping:
 
             total_rows = int(activations.shape[0])
 
-            # Prefer sequence-aware iteration when token_lengths metadata is present.
             if token_lengths and sum(int(x) for x in token_lengths) == total_rows:
                 start = 0
                 for seq_local_idx, seq_len in enumerate(token_lengths):
@@ -156,7 +149,6 @@ class FeatureMapping:
 
     def get_model_config(self, model_path):
         base_config = torch.load(model_path, map_location="cpu", weights_only=False).get("config", {})
-
         if not base_config:
             raise ValueError(f"Model checkpoint at {model_path} does not contain config information.")
         return base_config.get("sae", {})
@@ -169,10 +161,8 @@ class FeatureMapping:
         sparsity_weight = checkpoint_config.get("sparsity_weight", 1e-3)
 
         model = SparseAutoEncoder(input_dim, hidden_dim, sparsity_weight)
-
         if model_path:
             model.load_model(model_path, device=self.device)
-
         return model.to(self.device)
 
     def infer_input_dim(self):
@@ -182,21 +172,19 @@ class FeatureMapping:
         if activations is None:
             raise ValueError(f"Chunk {first_path} does not contain 'activations'.")
         return int(activations.shape[-1])
-    
+
     def _cfg_section(self, name):
         if hasattr(self.config, "section"):
             return self.config.section(name)
         if isinstance(self.config, dict):
             return self.config.get(name, {})
         return {}
-    
+
     def select_active_features(self, f_1d, top_k, threshold):
         active_mask = f_1d >= threshold
         active_indices = torch.nonzero(active_mask, as_tuple=False).flatten()
-
         if active_indices.numel() == 0:
             return [], []
-
         active_values = f_1d[active_indices]
         k = min(int(top_k), int(active_values.numel()))
         top_values, top_local_indices = torch.topk(active_values, k=k)
@@ -207,22 +195,11 @@ class FeatureMapping:
         output_path = Path(file_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         fieldnames = [
-            "sample_idx",
-            "sequence_idx",
-            "sequence_local_idx",
-            "token_idx_in_chunk",
-            "token_idx_in_sequence",
-            "token_id",
-            "token_str",
-            "prompt_preview",
-            "target_layer",
-            "chunk_id",
-            "chunk_path",
-            "feature_id",
-            "strength",
-            "rank",
-            "device",
-            "checkpoint",
+            "sample_idx", "sequence_idx", "sequence_local_idx",
+            "token_idx_in_chunk", "token_idx_in_sequence",
+            "token_id", "token_str", "prompt_preview",
+            "target_layer", "chunk_id", "chunk_path",
+            "feature_id", "strength", "rank", "device", "checkpoint",
         ]
         with output_path.open("w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -244,33 +221,20 @@ class FeatureMapping:
             strengths_tensor = torch.tensor(strengths, dtype=torch.float32)
             top_tokens = feature_token_counter[feature_id].most_common(5)
             top_tokens_text = " | ".join(f"{tok}:{cnt}" for tok, cnt in top_tokens)
-            rows.append(
-                {
-                    "feature_id": feature_id,
-                    "count_active": int(strengths_tensor.numel()),
-                    "mean_strength": float(strengths_tensor.mean().item()),
-                    "max_strength": float(strengths_tensor.max().item()),
-                    "p95_strength": float(torch.quantile(strengths_tensor, 0.95).item()),
-                    "top_tokens": top_tokens_text,
-                }
-            )
+            rows.append({
+                "feature_id": feature_id,
+                "count_active": int(strengths_tensor.numel()),
+                "mean_strength": float(strengths_tensor.mean().item()),
+                "max_strength": float(strengths_tensor.max().item()),
+                "p95_strength": float(torch.quantile(strengths_tensor, 0.95).item()),
+                "top_tokens": top_tokens_text,
+            })
 
         with output_csv.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(
-                f,
-                fieldnames=[
-                    "feature_id",
-                    "count_active",
-                    "mean_strength",
-                    "max_strength",
-                    "p95_strength",
-                    "top_tokens",
-                ],
-            )
+            writer = csv.DictWriter(f, fieldnames=["feature_id", "count_active", "mean_strength", "max_strength", "p95_strength", "top_tokens"])
             writer.writeheader()
             writer.writerows(rows)
 
-        # Cleaner aggregate view: one row per (feature, token) pair.
         token_pair_path = output_csv.with_name(output_csv.stem + "_token_pairs.csv")
         pair_rows = []
         pair_counter = defaultdict(Counter)
@@ -287,21 +251,16 @@ class FeatureMapping:
 
         for feature_id in sorted(pair_counter.keys()):
             for token, cnt in pair_counter[feature_id].most_common(30):
-                pair_rows.append(
-                    {
-                        "feature_id": feature_id,
-                        "token_str": token,
-                        "count": int(cnt),
-                        "mean_strength": float(pair_strength_sum[feature_id][token] / max(cnt, 1)),
-                        "max_strength": float(pair_strength_max[feature_id][token]),
-                    }
-                )
+                pair_rows.append({
+                    "feature_id": feature_id,
+                    "token_str": token,
+                    "count": int(cnt),
+                    "mean_strength": float(pair_strength_sum[feature_id][token] / max(cnt, 1)),
+                    "max_strength": float(pair_strength_max[feature_id][token]),
+                })
 
         with token_pair_path.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(
-                f,
-                fieldnames=["feature_id", "token_str", "count", "mean_strength", "max_strength"],
-            )
+            writer = csv.DictWriter(f, fieldnames=["feature_id", "token_str", "count", "mean_strength", "max_strength"])
             writer.writeheader()
             writer.writerows(pair_rows)
 
@@ -335,34 +294,19 @@ class FeatureMapping:
         top_k = int(mapping_cfg.get("top_k", 10))
         threshold = float(mapping_cfg.get("strength_threshold", 0.0))
         base_mapping_dir = Path(default_feature_mapping_dir(self.config))
-        event_output_path = mapping_cfg.get(
-            "event_output_path",
-            str(base_mapping_dir / "feature_mapping_events.csv"),
-        )
-        summary_txt_path = mapping_cfg.get(
-            "summary_output_path",
-            str(base_mapping_dir / "feature_mapping_summary.txt"),
-        )
-        summary_csv_path = mapping_cfg.get(
-            "summary_csv_output_path",
-            str(base_mapping_dir / "feature_mapping_feature_summary.csv"),
-        )
+        event_output_path = mapping_cfg.get("event_output_path", str(base_mapping_dir / "feature_mapping_events.csv"))
+        summary_txt_path = mapping_cfg.get("summary_output_path", str(base_mapping_dir / "feature_mapping_summary.txt"))
+        summary_csv_path = mapping_cfg.get("summary_csv_output_path", str(base_mapping_dir / "feature_mapping_feature_summary.csv"))
         checkpoint_path = mapping_cfg.get("model_path") or default_checkpoint_path(self.config)
         show_token_progress = bool(mapping_cfg.get("show_token_progress", True))
 
         input_dim = self.infer_input_dim()
         sae_model = self.load_sae_model(input_dim=input_dim)
-
         sae_model.eval()
         events = []
 
         with torch.no_grad():
-            rows = tqdm(
-                self._iter_activation_token_rows(),
-                total=count,
-                desc="Feature mapping",
-                disable=not show_token_progress,
-            )
+            rows = tqdm(self._iter_activation_token_rows(), total=count, desc="Feature mapping", disable=not show_token_progress)
             for row in rows:
                 sample_idx = int(row["sample_idx"])
                 if sample_idx >= count:
@@ -373,51 +317,41 @@ class FeatureMapping:
                     x = x.unsqueeze(0)
                 elif x.ndim > 2:
                     x = x.view(-1, x.shape[-1])
-
                 x = x.to(self.device)
 
                 _, f = sae_model(x)
                 f_1d = f[0]
 
-                top_indices, top_values = self.select_active_features(
-                    f_1d=f_1d,
-                    top_k=top_k,
-                    threshold=threshold,
-                )
+                top_indices, top_values = self.select_active_features(f_1d=f_1d, top_k=top_k, threshold=threshold)
 
                 for rank, (feature_id, strength) in enumerate(zip(top_indices, top_values), start=1):
                     token_id = int(row["token_id"])
-                    events.append(
-                        {
-                            "sample_idx": sample_idx,
-                            "sequence_idx": int(row["sequence_idx"]),
-                            "sequence_local_idx": int(row["sequence_local_idx"]),
-                            "token_idx_in_chunk": int(row["token_idx_in_chunk"]),
-                            "token_idx_in_sequence": int(row["token_idx_in_sequence"]),
-                            "token_id": token_id,
-                            "token_str": self._decode_token_for_csv(token_id),
-                            "prompt_preview": row["prompt_preview"],
-                            "target_layer": row["target_layer"],
-                            "chunk_id": row["chunk_id"],
-                            "chunk_path": row["chunk_path"],
-                            "feature_id": int(feature_id),
-                            "strength": float(strength),
-                            "rank": rank,
-                            "device": str(self.device),
-                            "checkpoint": checkpoint_path,
-                        }
-                    )
+                    events.append({
+                        "sample_idx": sample_idx,
+                        "sequence_idx": int(row["sequence_idx"]),
+                        "sequence_local_idx": int(row["sequence_local_idx"]),
+                        "token_idx_in_chunk": int(row["token_idx_in_chunk"]),
+                        "token_idx_in_sequence": int(row["token_idx_in_sequence"]),
+                        "token_id": token_id,
+                        "token_str": self._decode_token_for_csv(token_id),
+                        "prompt_preview": row["prompt_preview"],
+                        "target_layer": row["target_layer"],
+                        "chunk_id": row["chunk_id"],
+                        "chunk_path": row["chunk_path"],
+                        "feature_id": int(feature_id),
+                        "strength": float(strength),
+                        "rank": rank,
+                        "device": str(self.device),
+                        "checkpoint": checkpoint_path,
+                    })
 
         self.write_events_csv(events=events, file_path=event_output_path)
-        self.write_summary_files(
-            events=events,
-            summary_csv_path=summary_csv_path,
-            summary_txt_path=summary_txt_path,
-        )
+        self.write_summary_files(events=events, summary_csv_path=summary_csv_path, summary_txt_path=summary_txt_path)
 
         print(f"Events written to {event_output_path}")
         print(f"Feature summary csv written to {summary_csv_path}")
         print(f"Run summary written to {summary_txt_path}")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run feature mapping with SAE.")

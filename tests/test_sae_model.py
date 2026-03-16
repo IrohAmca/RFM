@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from sae.model import SparseAutoEncoder
+from rfm.sae.model import SparseAutoEncoder
 
 
 class TestSparseAutoEncoderForward:
@@ -23,7 +23,6 @@ class TestSparseAutoEncoderForward:
         assert f.shape == (1, self.hidden_dim)
 
     def test_features_non_negative(self):
-        """ReLU activation should produce non-negative features."""
         x = torch.randn(16, self.input_dim)
         _, f = self.model(x)
         assert (f >= 0).all()

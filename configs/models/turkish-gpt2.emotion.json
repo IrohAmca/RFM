@@ -16,7 +16,11 @@
   },
   "extraction": {
     "extractor_backend": "hf",
-    "target": "blocks.0.hook_resid_post",
+    "target": [
+      "blocks.0.hook_resid_post",
+      "blocks.6.hook_resid_post",
+      "blocks.11.hook_resid_post"
+    ],
     "count": 5000,
     "chunk_size": 1000000,
     "dtype": "bfloat16",

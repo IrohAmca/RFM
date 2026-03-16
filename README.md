@@ -1,13 +1,6 @@
-# RFM: GPT-2 Residual Feature Mapping with SAE
+# RFM: Residual Feature Mapping with SAE
 
-This project collects GPT-2 layer activations, trains a Sparse Autoencoder (SAE), and produces token-level feature mapping reports for interpretation.
-
-## Quick Workflow
-
-1. Activation extraction: `runner.py`
-2. SAE training: `train_runner.py`
-3. Feature mapping (token + strength): `sae/mapping.py`
-4. Visualization reports: `report_plots.py`
+Research pipeline for analyzing LLM internal representations using Sparse Autoencoders (SAEs). Extracts layer activations, trains SAEs, produces token-level feature maps, and supports emotion feature discovery + steering experiments.
 
 ## Setup
 
@@ -15,102 +8,105 @@ This project collects GPT-2 layer activations, trains a Sparse Autoencoder (SAE)
 uv sync
 ```
 
-## Run
+## Project Structure
+
+```
+rfm/                  # Main Python package
+├── config.py         # ConfigManager — JSON/TOML merge, dot-notation, validation
+├── layout.py         # Layer-scoped path conventions
+├── extractors/       # TransformerLens + HuggingFace CausalLM backends
+├── data/             # Dataset loading and activation chunk management
+├── sae/              # SAE model, training (dead feature analysis), mapping
+├── steering/         # Feature steering hooks, activation patching, emotion probe
+└── viz/              # Training metrics and mapping visualizations
+
+cli/                  # CLI entry points
+├── extract.py        # Activation extraction
+├── train.py          # SAE training (sparsity sweep support)
+├── pipeline.py       # End-to-end pipeline
+└── steer.py          # Feature steering, patching, emotion discovery
+
+configs/models/       # Per-model JSON config files
+runs/<model>/         # Model outputs (activations, checkpoints, reports)
+tests/                # 45 unit tests
+```
+
+## Usage
+
+### Full Pipeline
 
 ```bash
-# 1) Build activation chunks
-python runner.py --config config.json
+python -m cli.pipeline --config configs/models/gpt2-small.emotion.json
+python -m cli.pipeline --config configs/models/gpt2-small.emotion.json --skip-viz
+```
+
+### Step by Step
+
+```bash
+# 1) Extract activations (multi-layer supported)
+python -m cli.extract --config configs/models/gpt2-small.emotion.json
 
 # 2) Train SAE
-python train_runner.py --config config.json
+python -m cli.train --config configs/models/gpt2-small.emotion.json
 
-# 3) Generate feature mapping reports
-python -m sae.mapping --config config.json
+# 3) Run feature mapping
+python -m rfm.sae.mapping --config configs/models/gpt2-small.emotion.json
 
-# 4) Generate mapping visualizations
-python report_plots.py --mode mapping --output-dir reports/feature_mapping/viz
+# 4) Generate visualizations
+python -m rfm.viz.plots --mode mapping --config configs/models/gpt2-small.emotion.json
 ```
 
-Single-command pipeline:
+### Feature Steering
 
 ```bash
-python run_pipeline.py --config config.json
+# Discover which features correlate with which emotions
+python -m cli.steer discover --config configs/models/gpt2-small.emotion.json
+
+# Amplify or suppress a feature during generation
+python -m cli.steer steer \
+  --config configs/models/gpt2-small.emotion.json \
+  --layer blocks.11.hook_resid_post \
+  --feature-id 4231 --alpha 5.0 \
+  --prompt "I feel very"
+
+# Causal validation via activation patching
+python -m cli.steer patch \
+  --config configs/models/gpt2-small.emotion.json \
+  --layer blocks.11.hook_resid_post \
+  --clean "I feel very happy today" \
+  --patch "I feel very sad today"
 ```
 
-Useful flags:
+## Configuration
 
-- `--skip-viz`: run extraction + training + mapping only
-- `--continue-on-error`: continue remaining steps even if one fails
+Each model gets its own config file; all outputs are isolated under `runs/<model>/`.
 
-## Main Outputs
+**Multi-layer extraction** — set `extraction.target` to a list:
 
-- `reports/feature_mapping/feature_mapping_events.csv`
-- `reports/feature_mapping/feature_mapping_feature_summary.csv`
-- `reports/feature_mapping/feature_mapping_feature_summary_token_pairs.csv`
-- `reports/feature_mapping/feature_mapping_summary.txt`
-
-## Config Notes
-
-Feature mapping settings are controlled under `feature-mapping` in `config.json`:
-
-- `model_path`
-- `device`
-- `tokenizer_name`
-- `top_k`
-- `strength_threshold`
-- `count`
-
-## Scalable Project Design (Per Model)
-
-Use one config per model and keep outputs isolated under `runs/<model>/`.
-
-- Activation chunks: `runs/<model>/activations/`
-- SAE checkpoints: `runs/<model>/checkpoints/`
-- Mapping reports: `runs/<model>/reports/feature_mapping/`
-
-Recommended config layout:
-
-- `configs/models/gpt2-small.emotion.json`
-- `configs/models/turkish-gpt2.emotion.json`
-
-Run each model independently with its own config:
-
-```bash
-python runner.py --config configs/models/gpt2-small.emotion.json
-python train_runner.py --config configs/models/gpt2-small.emotion.json
-python -m sae.mapping --config configs/models/gpt2-small.emotion.json
+```json
+"extraction": {
+  "target": [
+    "blocks.0.hook_resid_post",
+    "blocks.6.hook_resid_post",
+    "blocks.11.hook_resid_post"
+  ]
+}
 ```
 
-Implementation note:
+Outputs are automatically organized per layer:
 
-- `extractor_factory.py` centralizes extractor selection.
-- `project_layout.py` centralizes model-scoped path conventions.
+```
+runs/gpt2-small/activations/blocks_6_hook_resid_post/
+runs/gpt2-small/checkpoints/blocks_6_hook_resid_post/sae.pt
+runs/gpt2-small/reports/feature_mapping/blocks_6_hook_resid_post/
+```
 
-## Per-Model Project Layout
+**Supported backends:**
+- `transformer_lens` (default) — GPT-2 and other TransformerLens-compatible models
+- `hf` — Any HuggingFace CausalLM (`"extractor_backend": "hf"` in config)
 
-Use one config file per model, and keep outputs isolated by model under `runs/`.
-
-Suggested layout:
-
-- `configs/models/gpt2-small.emotion.json`
-- `configs/models/turkish-gpt2.emotion.json`
-- `runs/gpt2-small/activations`
-- `runs/gpt2-small/checkpoints`
-- `runs/gpt2-small/reports/feature_mapping`
-- `runs/turkish-gpt2/activations`
-- `runs/turkish-gpt2/checkpoints`
-- `runs/turkish-gpt2/reports/feature_mapping`
-
-Run each model with its own config:
+## Tests
 
 ```bash
-python runner.py --config configs/models/gpt2-small.emotion.json
-python train_runner.py --config configs/models/gpt2-small.emotion.json
-python -m sae.mapping --config configs/models/gpt2-small.emotion.json
-python report_plots.py --mode mapping --output-dir runs/gpt2-small/reports/feature_mapping/viz
-
-python runner.py --config configs/models/turkish-gpt2.emotion.json
-python train_runner.py --config configs/models/turkish-gpt2.emotion.json
-python -m sae.mapping --config configs/models/turkish-gpt2.emotion.json
-python report_plots.py --mode mapping --output-dir runs/turkish-gpt2/reports/feature_mapping/viz
+.venv\Scripts\python -m pytest tests/ -v
 ```

@@ -1,5 +1,5 @@
 import pytest
-from project_layout import (
+from rfm.layout import (
     sanitize_model_name,
     sanitize_layer_name,
     model_slug,
@@ -8,7 +8,7 @@ from project_layout import (
     default_feature_mapping_dir,
     _is_multi_layer,
 )
-from config_manager import ConfigManager
+from rfm.config import ConfigManager
 
 
 class TestSanitize:

@@ -1,13 +1,11 @@
-from models.gpt2.extractor import GPT2Extractor
-from models.hf_causal.extractor import HFCausalExtractor
+"""Extractor backends for activation extraction from language models."""
+
+from rfm.extractors.transformer_lens import GPT2Extractor
+from rfm.extractors.hf_causal import HFCausalExtractor
 
 
 class ExtractorFactory:
-    """Registry entry point for model extractors.
-
-    For now, all HookedTransformer-compatible models use GPT2Extractor.
-    Add new extractor classes here when a model family requires custom behavior.
-    """
+    """Registry entry point for model extractors."""
 
     @staticmethod
     def create(config):
@@ -21,3 +19,6 @@ class ExtractorFactory:
             return HFCausalExtractor(config)
 
         return GPT2Extractor(config)
+
+
+__all__ = ["ExtractorFactory", "GPT2Extractor", "HFCausalExtractor"]

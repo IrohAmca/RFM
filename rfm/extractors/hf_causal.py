@@ -10,8 +10,6 @@ class HFCausalExtractor:
     Supports extraction of post-residual block outputs via targets like:
     - blocks.<idx>.hook_resid_post
     - layer.<idx>
-
-    For HF hidden states, block i post output corresponds to hidden_states[i + 1].
     """
 
     def __init__(self, config):
@@ -52,12 +50,10 @@ class HFCausalExtractor:
         return mapping.get(str(dtype_name).lower(), None)
 
     def _target_to_hidden_state_index(self, target):
-        # Format: blocks.<idx>.hook_resid_post
         match = re.match(r"^blocks\.(\d+)\.hook_resid_post$", str(target))
         if match:
             return int(match.group(1)) + 1
 
-        # Format: layer.<idx>
         match = re.match(r"^layer\.(\d+)$", str(target))
         if match:
             return int(match.group(1)) + 1

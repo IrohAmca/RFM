@@ -1,5 +1,5 @@
 import pytest
-from config_manager import ConfigManager
+from rfm.config import ConfigManager
 
 
 class TestConfigManagerGet:
@@ -24,7 +24,6 @@ class TestConfigManagerDeepMerge:
     def test_override_nested_value(self):
         cfg = ConfigManager({"sae": {"hidden_dim": 9999}})
         assert cfg.get("sae.hidden_dim") == 9999
-        # Default sparsity_weight should remain from DEFAULT_CONFIG
         assert cfg.get("sae.sparsity_weight") == 1e-3
 
     def test_add_new_section(self):
@@ -59,7 +58,7 @@ class TestConfigManagerSection:
         cfg = ConfigManager({"sae": {"hidden_dim": 3072}})
         section = cfg.section("sae")
         section["hidden_dim"] = 9999
-        assert cfg.get("sae.hidden_dim") == 3072  # original unchanged
+        assert cfg.get("sae.hidden_dim") == 3072
 
     def test_missing_section_returns_empty_dict(self):
         cfg = ConfigManager({})
@@ -108,8 +107,6 @@ class TestConfigManagerFromFile:
 
     def test_unsupported_format_raises(self):
         import tempfile
-        from pathlib import Path
-
         with tempfile.NamedTemporaryFile(suffix=".yaml", delete=False) as f:
             f.write(b"key: value")
             f.flush()

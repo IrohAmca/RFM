@@ -9,14 +9,9 @@ class SparseAutoEncoder(torch.nn.Module):
         self.hidden_dim = int(hidden_dim)
         self.sparsity_weight = float(sparsity_weight)
 
-        # x_centered = x - b_pre
         self.b_pre = torch.nn.Parameter(torch.zeros(self.input_dim))
-
-        # h = x_centered @ W_enc + b_enc
         self.W_enc = torch.nn.Parameter(torch.empty(self.input_dim, self.hidden_dim))
         self.b_enc = torch.nn.Parameter(torch.zeros(self.hidden_dim))
-
-        # x_hat_centered = f @ W_dec
         self.W_dec = torch.nn.Parameter(torch.empty(self.hidden_dim, self.input_dim))
 
         self.reset_parameters()
@@ -29,8 +24,6 @@ class SparseAutoEncoder(torch.nn.Module):
 
     @torch.no_grad()
     def normalize_decoder_columns(self, eps=1e-12):
-        # W_dec shape is [hidden_dim, input_dim], so each hidden feature is a row vector.
-        # Normalize per-feature decoder vectors to unit norm.
         norms = self.W_dec.norm(dim=1, keepdim=True).clamp_min(eps)
         self.W_dec.div_(norms)
 

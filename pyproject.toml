@@ -1,7 +1,7 @@
 [project]
 name = "rfm"
 version = "0.1.0"
-description = "Add your description here"
+description = "GPT-2 Residual Feature Mapping with SAE for Mechanistic Interpretability"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 dependencies = [
@@ -13,6 +13,9 @@ dependencies = [
     "tqdm>=4.66.0",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
 [tool.uv.sources]
 torch = { index = "pytorch-cu124" }
 
@@ -20,3 +23,8 @@ torch = { index = "pytorch-cu124" }
 name = "pytorch-cu124"
 url = "https://download.pytorch.org/whl/cu124"
 explicit = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+

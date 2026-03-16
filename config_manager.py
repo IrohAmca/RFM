@@ -106,8 +106,41 @@ class ConfigManager:
             current = current[part]
         return current
 
+    def set(self, key, value):
+        """Set a config value using dot-notation key."""
+        parts = key.split(".")
+        current = self._config
+        for part in parts[:-1]:
+            if part not in current or not isinstance(current[part], dict):
+                current[part] = {}
+            current = current[part]
+        current[parts[-1]] = value
+
     def section(self, name):
         value = self._config.get(name, {})
         if not isinstance(value, dict):
             return {}
         return copy.deepcopy(value)
+
+    def validate(self):
+        """Validate config structure. Returns list of error messages (empty = valid)."""
+        errors = []
+
+        target = self.get("extraction.target")
+        if target is None:
+            errors.append("extraction.target is required")
+        elif isinstance(target, list):
+            if not target:
+                errors.append("extraction.target list must not be empty")
+            for t in target:
+                if not isinstance(t, str) or not t.strip():
+                    errors.append(f"extraction.target contains invalid entry: {t!r}")
+        elif not isinstance(target, str) or not target.strip():
+            errors.append(f"extraction.target must be a string or list, got: {type(target).__name__}")
+
+        model_name = self.get("model_name")
+        if not model_name or not isinstance(model_name, str):
+            errors.append("model_name is required and must be a non-empty string")
+
+        return errors
+

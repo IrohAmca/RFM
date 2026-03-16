@@ -100,71 +100,100 @@ def flush_chunk(
     return chunk_index + 1
 
 
-args = parse_args()
-config = ConfigManager.from_file(args.config)
+def _resolve_targets(config):
+    """Return a list of target layer names from config."""
+    raw = config.get("extraction.target")
+    if isinstance(raw, list):
+        return raw
+    return [raw]
 
-target = config.get("extraction.target")
-chunk_size = int(config.get("extraction.chunk_size", 1_000_000))
-count = int(config.get("extraction.count", 100))
-output_dir = config.get("extraction.output_dir", ".")
-if output_dir in (None, "", "."):
-    output_dir = default_activations_dir(config)
-output_prefix = config.get("extraction.output_prefix", "activations")
-activation_dtype = resolve_dtype(config.get("extraction.dtype", "bfloat16"))
-text_field = config.get("dataloader.text_field", "content")
 
-Path(output_dir).mkdir(parents=True, exist_ok=True)
+def extract_single_target(target, extractor, dataloader, config):
+    """Run extraction for a single target layer."""
+    from project_layout import sanitize_layer_name
 
-extractor = ExtractorFactory.create(config)
-dataloader = BaseDataLoader(config)
-dataloader.load()
+    chunk_size = int(config.get("extraction.chunk_size", 1_000_000))
+    count = int(config.get("extraction.count", 100))
+    output_prefix = config.get("extraction.output_prefix", "activations")
+    activation_dtype = resolve_dtype(config.get("extraction.dtype", "bfloat16"))
+    text_field = config.get("dataloader.text_field", "content")
 
-buffer_acts = []
-buffer_tks = []
-buffer_lens = []
+    output_dir = config.get("extraction.output_dir", ".")
+    if output_dir in (None, "", "."):
+        output_dir = default_activations_dir(config)
 
-chunk_index = 0
+    targets = _resolve_targets(config)
+    if len(targets) > 1:
+        output_dir = str(Path(output_dir) / sanitize_layer_name(target))
 
-for i, text in enumerate(
-    tqdm(islice(dataloader, count), total=count, desc="Extracting")
-):
-    sample_text = text.get(text_field, "")
-    if not sample_text:
-        continue
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    activations = extractor.extract(sample_text, target)
-    tokens = extractor.to_tokens(sample_text).squeeze(0)
+    buffer_acts = []
+    buffer_tks = []
+    buffer_lens = []
+    chunk_index = 0
 
-    acts_2d = activations.reshape(-1, activations.shape[-1]).to(activation_dtype).cpu()
-    if acts_2d.shape[0] != tokens.shape[0]:
-        raise ValueError(
-            f"Activation/token length mismatch: acts={acts_2d.shape[0]} tokens={tokens.shape[0]}"
-        )
+    for i, text in enumerate(
+        tqdm(islice(dataloader, count), total=count, desc=f"Extracting [{target}]")
+    ):
+        sample_text = text.get(text_field, "")
+        if not sample_text:
+            continue
 
-    buffer_acts.append(acts_2d)
-    buffer_tks.append(tokens.cpu())
-    buffer_lens.append(int(tokens.shape[0]))
+        activations = extractor.extract(sample_text, target)
+        tokens = extractor.to_tokens(sample_text).squeeze(0)
 
-    current_size = sum([t.shape[0] for t in buffer_acts])
-    if current_size >= chunk_size:
-        chunk_index = flush_chunk(
-            buffer_acts,
-            buffer_tks,
-            buffer_lens,
-            target,
-            extractor.model_name,
-            chunk_index,
-            output_dir,
-            output_prefix,
-        )
+        acts_2d = activations.reshape(-1, activations.shape[-1]).to(activation_dtype).cpu()
+        if acts_2d.shape[0] != tokens.shape[0]:
+            raise ValueError(
+                f"Activation/token length mismatch: acts={acts_2d.shape[0]} tokens={tokens.shape[0]}"
+            )
 
-chunk_index = flush_chunk(
-    buffer_acts,
-    buffer_tks,
-    buffer_lens,
-    target,
-    extractor.model_name,
-    chunk_index,
-    output_dir,
-    output_prefix,
-)
+        buffer_acts.append(acts_2d)
+        buffer_tks.append(tokens.cpu())
+        buffer_lens.append(int(tokens.shape[0]))
+
+        current_size = sum([t.shape[0] for t in buffer_acts])
+        if current_size >= chunk_size:
+            chunk_index = flush_chunk(
+                buffer_acts,
+                buffer_tks,
+                buffer_lens,
+                target,
+                extractor.model_name,
+                chunk_index,
+                output_dir,
+                output_prefix,
+            )
+
+    flush_chunk(
+        buffer_acts,
+        buffer_tks,
+        buffer_lens,
+        target,
+        extractor.model_name,
+        chunk_index,
+        output_dir,
+        output_prefix,
+    )
+
+    print(f"[runner] Extraction complete for target: {target} → {output_dir}")
+
+
+def main():
+    args = parse_args()
+    config = ConfigManager.from_file(args.config)
+
+    extractor = ExtractorFactory.create(config)
+    dataloader = BaseDataLoader(config)
+    dataloader.load()
+
+    targets = _resolve_targets(config)
+
+    for target in targets:
+        dataloader.load()  # reload iterator for each target
+        extract_single_target(target, extractor, dataloader, config)
+
+
+if __name__ == "__main__":
+    main()

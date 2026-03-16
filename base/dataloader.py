@@ -116,7 +116,7 @@ class BaseDataset:
             if not data_path.exists():
                 raise FileNotFoundError(f"Dataset file not found: {data_path}")
 
-            row_data = torch.load(data_path, map_location="cpu")
+            row_data = torch.load(data_path, map_location="cpu", weights_only=False)
             if isinstance(row_data, dict) and "activations" in row_data:
                 acts = row_data["activations"]
             else:

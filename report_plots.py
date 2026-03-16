@@ -78,7 +78,7 @@ def parse_args():
 
 
 def load_checkpoint(path: Path):
-    payload = torch.load(path, map_location="cpu")
+    payload = torch.load(path, map_location="cpu", weights_only=False)
     history = payload.get("history", [])
     cfg = payload.get("config", {})
     sae_cfg = cfg.get("sae", {}) if isinstance(cfg, dict) else {}

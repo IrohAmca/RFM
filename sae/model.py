@@ -57,6 +57,6 @@ class SparseAutoEncoder(torch.nn.Module):
         return total_loss, recon_loss, sparsity_loss
 
     def load_model(self, path, device=None):
-        state = torch.load(path, map_location=device)
+        state = torch.load(path, map_location=device, weights_only=False)
         self.load_state_dict(state["state_dict"])
         return self

@@ -206,5 +206,42 @@ def train(config):
             )
         print(summary)
 
+    # Dead feature analysis
+    dead_info = _dead_feature_analysis(model, train_loader, device, active_threshold)
+    if dead_info:
+        print(
+            f"\n[Dead Feature Analysis] "
+            f"dead={dead_info['dead_count']}/{dead_info['total_features']} "
+            f"({dead_info['dead_ratio']:.1%}) "
+            f"alive={dead_info['alive_count']}"
+        )
+    history.append({"dead_feature_analysis": dead_info})
+
     model.training_history = history
     return model
+
+
+@torch.no_grad()
+def _dead_feature_analysis(model, loader, device, threshold):
+    """Identify features that never activate above threshold across the dataset."""
+    model.eval()
+    hidden_dim = model.hidden_dim
+    ever_active = torch.zeros(hidden_dim, dtype=torch.bool, device=device)
+
+    for (x,) in loader:
+        x = x.to(device)
+        _, f = model(x)
+        batch_active = (f > threshold).any(dim=0)
+        ever_active |= batch_active
+
+    alive_count = int(ever_active.sum().item())
+    dead_count = hidden_dim - alive_count
+
+    return {
+        "total_features": hidden_dim,
+        "alive_count": alive_count,
+        "dead_count": dead_count,
+        "dead_ratio": dead_count / max(hidden_dim, 1),
+        "dead_feature_ids": torch.nonzero(~ever_active, as_tuple=False).flatten().cpu().tolist(),
+    }
+

@@ -86,7 +86,7 @@ class FeatureMapping:
         default_layer = self._cfg_value("extraction.target", "")
 
         for data_path in self._dataset_paths():
-            payload = torch.load(data_path, map_location="cpu")
+            payload = torch.load(data_path, map_location="cpu", weights_only=False)
             activations = payload.get("activations")
             tokens = payload.get("tokens")
             metadata = payload.get("metadata", {}) if isinstance(payload, dict) else {}
@@ -155,7 +155,7 @@ class FeatureMapping:
                 global_sequence_idx += 1
 
     def get_model_config(self, model_path):
-        base_config = torch.load(model_path, map_location="cpu").get("config", {})
+        base_config = torch.load(model_path, map_location="cpu", weights_only=False).get("config", {})
 
         if not base_config:
             raise ValueError(f"Model checkpoint at {model_path} does not contain config information.")
@@ -177,7 +177,7 @@ class FeatureMapping:
 
     def infer_input_dim(self):
         first_path = self._dataset_paths()[0]
-        first_payload = torch.load(first_path, map_location="cpu")
+        first_payload = torch.load(first_path, map_location="cpu", weights_only=False)
         activations = first_payload.get("activations")
         if activations is None:
             raise ValueError(f"Chunk {first_path} does not contain 'activations'.")

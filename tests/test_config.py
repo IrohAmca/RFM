@@ -1,0 +1,117 @@
+import pytest
+from config_manager import ConfigManager
+
+
+class TestConfigManagerGet:
+    def test_top_level_key(self):
+        cfg = ConfigManager({"model_name": "test-model"})
+        assert cfg.get("model_name") == "test-model"
+
+    def test_dot_notation_access(self):
+        cfg = ConfigManager({"extraction": {"target": "blocks.0.hook_resid_post"}})
+        assert cfg.get("extraction.target") == "blocks.0.hook_resid_post"
+
+    def test_missing_key_returns_default(self):
+        cfg = ConfigManager({})
+        assert cfg.get("nonexistent.key", "fallback") == "fallback"
+
+    def test_missing_key_returns_none(self):
+        cfg = ConfigManager({})
+        assert cfg.get("nonexistent.key") is None
+
+
+class TestConfigManagerDeepMerge:
+    def test_override_nested_value(self):
+        cfg = ConfigManager({"sae": {"hidden_dim": 9999}})
+        assert cfg.get("sae.hidden_dim") == 9999
+        # Default sparsity_weight should remain from DEFAULT_CONFIG
+        assert cfg.get("sae.sparsity_weight") == 1e-3
+
+    def test_add_new_section(self):
+        cfg = ConfigManager({"custom": {"key": "value"}})
+        assert cfg.get("custom.key") == "value"
+
+    def test_default_values_preserved(self):
+        cfg = ConfigManager({})
+        assert cfg.get("model_name") == "gpt2-small"
+        assert cfg.get("extraction.target") == "blocks.0.hook_resid_post"
+
+
+class TestConfigManagerSet:
+    def test_set_simple_key(self):
+        cfg = ConfigManager({})
+        cfg.set("model_name", "new-model")
+        assert cfg.get("model_name") == "new-model"
+
+    def test_set_nested_key(self):
+        cfg = ConfigManager({})
+        cfg.set("extraction.target", "blocks.11.hook_resid_post")
+        assert cfg.get("extraction.target") == "blocks.11.hook_resid_post"
+
+    def test_set_creates_intermediate_dicts(self):
+        cfg = ConfigManager({})
+        cfg.set("new.deeply.nested.key", 42)
+        assert cfg.get("new.deeply.nested.key") == 42
+
+
+class TestConfigManagerSection:
+    def test_section_returns_copy(self):
+        cfg = ConfigManager({"sae": {"hidden_dim": 3072}})
+        section = cfg.section("sae")
+        section["hidden_dim"] = 9999
+        assert cfg.get("sae.hidden_dim") == 3072  # original unchanged
+
+    def test_missing_section_returns_empty_dict(self):
+        cfg = ConfigManager({})
+        assert cfg.section("nonexistent") == {}
+
+
+class TestConfigManagerValidation:
+    def test_valid_config(self):
+        cfg = ConfigManager({"model_name": "gpt2-small"})
+        errors = cfg.validate()
+        assert len(errors) == 0
+
+    def test_missing_target(self):
+        cfg = ConfigManager({})
+        cfg.set("extraction.target", None)
+        errors = cfg.validate()
+        assert any("extraction.target" in e for e in errors)
+
+    def test_empty_target_list(self):
+        cfg = ConfigManager({})
+        cfg.set("extraction.target", [])
+        errors = cfg.validate()
+        assert any("empty" in e for e in errors)
+
+    def test_target_list_with_valid_entries(self):
+        cfg = ConfigManager({})
+        cfg.set("extraction.target", ["blocks.0.hook_resid_post", "blocks.6.hook_resid_post"])
+        errors = cfg.validate()
+        assert len(errors) == 0
+
+    def test_target_list_with_invalid_entry(self):
+        cfg = ConfigManager({})
+        cfg.set("extraction.target", ["blocks.0.hook_resid_post", ""])
+        errors = cfg.validate()
+        assert any("invalid" in e for e in errors)
+
+
+class TestConfigManagerFromFile:
+    def test_none_returns_defaults(self):
+        cfg = ConfigManager.from_file(None)
+        assert cfg.get("model_name") == "gpt2-small"
+
+    def test_nonexistent_file_raises(self):
+        with pytest.raises(FileNotFoundError):
+            ConfigManager.from_file("nonexistent_file.json")
+
+    def test_unsupported_format_raises(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.NamedTemporaryFile(suffix=".yaml", delete=False) as f:
+            f.write(b"key: value")
+            f.flush()
+            with pytest.raises(ValueError, match="Unsupported"):
+                ConfigManager.from_file(f.name)

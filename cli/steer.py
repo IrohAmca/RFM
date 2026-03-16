@@ -29,9 +29,12 @@ def parse_args():
     steer = subparsers.add_parser("steer", help="Steer model output via SAE features.")
     steer.add_argument("--config", required=True)
     steer.add_argument("--layer", required=True)
-    steer.add_argument("--feature-id", type=int, required=True)
+    steer.add_argument("--feature-id", type=int, default=None, help="Single feature to steer.")
     steer.add_argument("--alpha", type=float, default=5.0)
     steer.add_argument("--mode", default="add", choices=["add", "ablate", "clamp"])
+    steer.add_argument("--features", default=None,
+                       help="Multi-feature steering: comma-separated 'id:alpha' pairs, e.g. '3129:-15,3583:15'."
+                            " If set, --feature-id and --alpha are ignored.")
     steer.add_argument("--prompt", required=True)
     steer.add_argument("--max-tokens", type=int, default=50)
 
@@ -147,15 +150,37 @@ def cmd_steer(args):
         clean_out = hf_model.generate(**inputs, max_new_tokens=args.max_tokens, temperature=0.7, do_sample=True)
     print(tokenizer.decode(clean_out[0], skip_special_tokens=True))
 
-    print(f"\n--- Steered (feature={args.feature_id}, alpha={args.alpha}, mode={args.mode}) ---")
-    hook_handle = HFSteeringHook.apply(hf_model=hf_model, target_layer=args.layer, sae_model=sae_model,
-                                       feature_id=args.feature_id, alpha=args.alpha, mode=args.mode)
+    # Build feature list: either from --features or single --feature-id/--alpha
+    if args.features:
+        feature_configs = []
+        for item in args.features.split(","):
+            parts = item.strip().split(":")
+            fid = int(parts[0])
+            falpha = float(parts[1]) if len(parts) > 1 else args.alpha
+            feature_configs.append({"feature_id": fid, "alpha": falpha, "mode": args.mode})
+    else:
+        if args.feature_id is None:
+            print("Error: provide --feature-id or --features")
+            sys.exit(1)
+        feature_configs = [{"feature_id": args.feature_id, "alpha": args.alpha, "mode": args.mode}]
+
+    label = args.features if args.features else f"feature={args.feature_id}, alpha={args.alpha}, mode={args.mode}"
+    print(f"\n--- Steered ({label}) ---")
+
+    handles = []
+    for fc in feature_configs:
+        h = HFSteeringHook.apply(
+            hf_model=hf_model, target_layer=args.layer, sae_model=sae_model,
+            feature_id=fc["feature_id"], alpha=fc["alpha"], mode=fc["mode"]
+        )
+        handles.append(h)
+
     with torch.no_grad():
         steered_out = hf_model.generate(**inputs, max_new_tokens=args.max_tokens, temperature=0.7, do_sample=True)
     print(tokenizer.decode(steered_out[0], skip_special_tokens=True))
-    
-    # Remove the PyTorch hook after steering
-    hook_handle.remove()
+
+    for h in handles:
+        h.remove()
 
 
 def cmd_patch(args):

@@ -14,6 +14,12 @@ For contributor tooling:
 uv sync --extra dev
 ```
 
+For new analysis and dashboard features:
+
+```bash
+uv sync --extra autointerp --extra dashboard --extra dev
+```
+
 ## Project Structure
 
 ```
@@ -37,7 +43,7 @@ cli/                  # CLI entry points
 
 configs/models/       # Per-model JSON config files
 runs/<model>/         # Model outputs (activations, checkpoints, reports)
-tests/                # 45 unit tests
+tests/                # Unit tests
 ```
 
 ## Usage
@@ -47,6 +53,8 @@ tests/                # 45 unit tests
 ```bash
 python -m cli.pipeline --config configs/models/gpt2-small.emotion.json
 python -m cli.pipeline --config configs/models/gpt2-small.emotion.json --skip-viz
+python -m cli.pipeline --config configs/models/gpt2-small.emotion.json --skip-extract --skip-train
+python -m cli.pipeline --config configs/models/gpt2-small.emotion.json --from-step mapping
 ```
 
 ### Step by Step
@@ -98,6 +106,36 @@ uv run python -m cli.steer patch \
 # Feature Clustering (Cosine similarity between feature decoders)
 uv run python -m cli.analyze cluster --config configs/models/gpt2-small.emotion.json
 
+# Run analysis only for one layer
+uv run python -m cli.analyze autointerp --config configs/models/gpt2-small.emotion.json --layer blocks.11.hook_resid_post
+
+# Use Groq OpenAI-compatible endpoint with rate-limit friendly pacing
+uv run python -m cli.analyze autointerp --config configs/models/gpt2-small.emotion.json --groq --model llama-3.1-8b-instant --request-delay 11
+
+# Restart autointerp from scratch (ignore existing partial JSON)
+uv run python -m cli.analyze autointerp --config configs/models/gpt2-small.emotion.json --no-resume
+
+```
+
+API key and base URL requirements for autointerp:
+
+- Default endpoint is OpenAI. Provide key via `OPENAI_API_KEY` or `--api-key`.
+- For Groq, use `--groq` and provide key via `GROQ_API_KEY` (or `--api-key`).
+- For any OpenAI-compatible provider, use `--base-url <provider_url>` and `--api-key <provider_key>`.
+
+Examples:
+
+```bash
+# OpenAI (default endpoint)
+set OPENAI_API_KEY=your_openai_key
+uv run python -m cli.analyze autointerp --config configs/models/gpt2-small.emotion.json
+
+# Groq shortcut (uses https://api.groq.com/openai/v1)
+set GROQ_API_KEY=your_groq_key
+uv run python -m cli.analyze autointerp --config configs/models/gpt2-small.emotion.json --groq --model llama-3.1-8b-instant
+
+# Generic OpenAI-compatible endpoint
+uv run python -m cli.analyze autointerp --config configs/models/gpt2-small.emotion.json --base-url https://your-provider.example/v1 --api-key your_provider_key
 ```
 
 ## Configuration

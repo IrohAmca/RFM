@@ -5,6 +5,7 @@ description = "GPT-2 Residual Feature Mapping with SAE for Mechanistic Interpret
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 dependencies = [
+    "datasets>=2.20,<4",
     "torch>=2.4,<2.7",
     "transformers>=4.57.6,<5",
     "transformer-lens @ git+https://github.com/TransformerLensOrg/TransformerLens",
@@ -27,4 +28,3 @@ explicit = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-

@@ -8,6 +8,12 @@ Research pipeline for analyzing LLM internal representations using Sparse Autoen
 uv sync
 ```
 
+For contributor tooling:
+
+```bash
+uv sync --extra dev
+```
+
 ## Project Structure
 
 ```
@@ -54,6 +60,7 @@ python -m rfm.sae.mapping --config configs/models/gpt2-small.emotion.json
 
 # 4) Generate visualizations
 python -m rfm.viz.plots --mode mapping --config configs/models/gpt2-small.emotion.json
+python -m rfm.viz.plots --mode all --config configs/models/gpt2-small.emotion.json
 ```
 
 ### Feature Steering
@@ -108,5 +115,5 @@ runs/gpt2-small/reports/feature_mapping/blocks_6_hook_resid_post/
 ## Tests
 
 ```bash
-.venv\Scripts\python -m pytest tests/ -v
+uv run pytest -q
 ```

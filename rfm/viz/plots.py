@@ -1,6 +1,7 @@
 import argparse
 import csv
 from pathlib import Path
+from types import SimpleNamespace
 
 import matplotlib
 
@@ -26,10 +27,16 @@ def parse_args():
         description="Generate SAE training or feature-mapping charts."
     )
     parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Optional config file. When set, report paths are derived automatically.",
+    )
+    parser.add_argument(
         "--mode",
         type=str,
         default="training",
-        choices=["training", "mapping"],
+        choices=["training", "mapping", "all"],
         help="Which report family to generate.",
     )
     parser.add_argument(
@@ -94,11 +101,22 @@ def load_checkpoint(path: Path):
     }
 
 
+def _history_epoch_rows(history):
+    return [
+        step for step in history
+        if isinstance(step, dict) and _is_number(step.get("epoch"))
+    ]
+
+
 def final_metrics(run):
     if not run["history"]:
         return None
 
-    last = run["history"][-1]
+    epoch_rows = _history_epoch_rows(run["history"])
+    if not epoch_rows:
+        return None
+
+    last = epoch_rows[-1]
     return {
         "name": run["name"],
         "checkpoint": run["path"],
@@ -220,7 +238,7 @@ def build_epoch_metric_charts(runs, output_dir: Path):
         has_trace = False
 
         for run in runs:
-            history = run.get("history", [])
+            history = _history_epoch_rows(run.get("history", []))
             x_vals = []
             y_vals = []
             for step in history:
@@ -409,6 +427,56 @@ def build_mapping_sequence_timeline(events_rows, output_path: Path):
     plt.close(fig)
 
 
+def _resolve_targets(config):
+    raw = config.get("extraction.target")
+    if isinstance(raw, list):
+        return raw
+    if raw:
+        return [raw]
+    return ["blocks.0.hook_resid_post"]
+
+
+def _mode_output_dir(base_config, mode, target, override_dir):
+    from rfm.layout import _is_multi_layer, default_feature_mapping_dir, model_slug, sanitize_layer_name
+
+    if override_dir and override_dir != "reports":
+        output_dir = Path(override_dir) / mode
+        if _is_multi_layer(base_config):
+            output_dir = output_dir / sanitize_layer_name(target)
+        return output_dir
+
+    if mode == "mapping":
+        return Path(default_feature_mapping_dir(base_config, target=target)) / "viz"
+
+    output_dir = Path("runs") / model_slug(base_config) / "reports" / "training"
+    if _is_multi_layer(base_config):
+        output_dir = output_dir / sanitize_layer_name(target)
+    return output_dir
+
+
+def _configured_training_args(base_config, target, pattern):
+    from rfm.layout import default_checkpoint_path
+
+    checkpoint_path = Path(default_checkpoint_path(base_config, target=target))
+    return {
+        "checkpoints_dir": str(checkpoint_path.parent),
+        "pattern": pattern,
+    }
+
+
+def _configured_mapping_args(base_config, target, top_features):
+    from rfm.layout import default_feature_mapping_dir
+
+    mapping_dir = Path(default_feature_mapping_dir(base_config, target=target))
+    summary_path = mapping_dir / "feature_mapping_feature_summary.csv"
+    return {
+        "mapping_events_csv": str(mapping_dir / "feature_mapping_events.csv"),
+        "mapping_summary_csv": str(summary_path),
+        "mapping_token_pairs_csv": str(summary_path.with_name(summary_path.stem + "_token_pairs.csv")),
+        "top_features": top_features,
+    }
+
+
 def run_training_reports(args, output_dir: Path):
     checkpoints_dir = Path(args.checkpoints_dir)
 
@@ -471,13 +539,53 @@ def run_mapping_reports(args, output_dir: Path):
     print(f"Feature summary rows: {len(summary_rows)}")
 
 
+def run_reports_from_config(args):
+    from rfm.config import ConfigManager
+
+    base_config = ConfigManager.from_file(args.config)
+    targets = _resolve_targets(base_config)
+
+    for target in targets:
+        if len(targets) > 1:
+            print(f"[viz] Processing target layer: {target}")
+
+        if args.mode in {"training", "all"}:
+            training_output_dir = _mode_output_dir(base_config, "training", target, args.output_dir)
+            training_output_dir.mkdir(parents=True, exist_ok=True)
+            run_training_reports(
+                SimpleNamespace(**_configured_training_args(base_config, target, args.pattern)),
+                training_output_dir,
+            )
+
+        if args.mode in {"mapping", "all"}:
+            mapping_output_dir = _mode_output_dir(base_config, "mapping", target, args.output_dir)
+            mapping_output_dir.mkdir(parents=True, exist_ok=True)
+            run_mapping_reports(
+                SimpleNamespace(**_configured_mapping_args(base_config, target, args.top_features)),
+                mapping_output_dir,
+            )
+
+
 def main():
     args = parse_args()
+
+    if args.config:
+        run_reports_from_config(args)
+        return
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     if args.mode == "training":
         run_training_reports(args, output_dir)
+        return
+
+    if args.mode == "all":
+        training_output_dir = output_dir / "training"
+        mapping_output_dir = output_dir / "mapping"
+        training_output_dir.mkdir(parents=True, exist_ok=True)
+        mapping_output_dir.mkdir(parents=True, exist_ok=True)
+        run_training_reports(args, training_output_dir)
+        run_mapping_reports(args, mapping_output_dir)
         return
 
     run_mapping_reports(args, output_dir)

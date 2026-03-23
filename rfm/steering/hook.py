@@ -7,6 +7,58 @@ features in the residual stream during a forward pass.
 import torch
 
 
+def _hf_module_sequence(module):
+    for attr in ("h", "layers", "layer", "blocks"):
+        if hasattr(module, attr):
+            return getattr(module, attr)
+    return module
+
+
+def resolve_hf_target_module(hf_model, target_layer):
+    """Resolve a TransformerLens-style layer path to a HuggingFace submodule."""
+    target_module = hf_model
+
+    for part in str(target_layer).split("."):
+        if part == "hook_resid_post":
+            continue
+
+        if part == "blocks":
+            if hasattr(target_module, "transformer"):
+                target_module = getattr(target_module, "transformer")
+            elif hasattr(target_module, "model"):
+                target_module = getattr(target_module, "model")
+            else:
+                target_module = _hf_module_sequence(target_module)
+            continue
+
+        if part in {"layer", "layers", "h"}:
+            if hasattr(target_module, part):
+                target_module = getattr(target_module, part)
+                continue
+            nested_model = getattr(target_module, "model", None)
+            if nested_model is not None and hasattr(nested_model, part):
+                target_module = getattr(nested_model, part)
+                continue
+
+        if part.isdigit():
+            container = _hf_module_sequence(target_module)
+            target_module = container[int(part)]
+            continue
+
+        if hasattr(target_module, part):
+            target_module = getattr(target_module, part)
+            continue
+
+        nested_model = getattr(target_module, "model", None)
+        if nested_model is not None and hasattr(nested_model, part):
+            target_module = getattr(nested_model, part)
+            continue
+
+        raise ValueError(f"Could not resolve target layer {target_layer!r} on model {type(hf_model).__name__}.")
+
+    return target_module
+
+
 class SteeringHook:
     """Inject or suppress SAE feature directions in the residual stream.
 
@@ -205,21 +257,6 @@ class HFSteeringHook(SteeringHook):
             RemovableHandle to allow detachment.
         """
         hook = cls(sae_model, feature_id, alpha=alpha, mode=mode)
-        
-        # Traverse the model to find the specific nn.Module
-        target_module = hf_model
-        for part in target_layer.split('.'):
-            # Try to handle typical TransformerLens->HF mapping ('blocks.11' -> 'transformer.h.11')
-            if part == 'blocks': part = 'transformer'
-            elif part == 'hook_resid_post': continue
-            
-            if hasattr(target_module, part):
-                target_module = getattr(target_module, part)
-            elif part == 'transformer' and hasattr(target_module, 'model'): # Llama fallback
-                target_module = getattr(target_module, 'model')
-            elif hasattr(target_module, 'h'): # typical GPT2 
-                target_module = getattr(target_module, 'h')
-                
-        # Register the raw PyTorch hook
+        target_module = resolve_hf_target_module(hf_model, target_layer)
         handle = target_module.register_forward_hook(hook.hook_fn)
         return handle

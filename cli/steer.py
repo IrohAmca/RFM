@@ -67,6 +67,7 @@ def _load_model_and_sae(config, target):
     # Always load raw HuggingFace for steering to avoid TransformerLens type issues
     print(f"[steer] Loading {model_name} via HuggingFace AutoModelForCausalLM...")
     hf_model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
+    hf_model.eval()
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     mapping_cfg = config.section("feature-mapping") if hasattr(config, "section") else {}
@@ -185,18 +186,18 @@ def cmd_steer(args):
 
 def cmd_patch(args):
     config = ConfigManager.from_file(args.config)
-    model, sae_model = _load_model_and_sae(config, args.layer)
+    model, tokenizer, sae_model = _load_model_and_sae(config, args.layer)
 
     if args.feature_id is not None:
         result = activation_patch(model=model, sae_model=sae_model, clean_text=args.clean,
                                   patch_text=args.patch, target_layer=args.layer,
-                                  feature_id=args.feature_id, metric=args.metric)
+                                  feature_id=args.feature_id, metric=args.metric, tokenizer=tokenizer)
         print("\n--- Patching Result ---")
         print(f"  Feature: {result['feature_id']}  Effect: {result['effect']:.6f}")
     else:
         results = batch_feature_patching(model=model, sae_model=sae_model, clean_text=args.clean,
                                          patch_text=args.patch, target_layer=args.layer,
-                                         top_k=args.top_k, metric=args.metric)
+                                         top_k=args.top_k, metric=args.metric, tokenizer=tokenizer)
         print(f"\n--- Batch Patching ({len(results)} features) ---")
         for r in results:
             print(f"  feature={r['feature_id']:>5d}  effect={r['effect']:.6f}")

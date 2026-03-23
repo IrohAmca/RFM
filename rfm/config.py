@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
+import tomli
 
 DEFAULT_CONFIG = {
     "model_name": "gpt2-small",
@@ -34,6 +35,8 @@ DEFAULT_CONFIG = {
     },
     "sae": {
         "hidden_dim": 3072,
+        "architecture": "vanilla",
+        "topk_k": 32,
         "sparsity_weight": 1e-3,
         "sparsity_sweep": [],
     },
@@ -81,13 +84,7 @@ class ConfigManager:
             return cls(data)
 
         if suffix == ".toml":
-            try:
-                import tomllib
-            except ModuleNotFoundError as exc:
-                raise ModuleNotFoundError(
-                    "TOML config requires Python 3.11+ for tomllib or installing tomli."
-                ) from exc
-            data = tomllib.loads(path.read_text(encoding="utf-8"))
+            data = tomli.loads(path.read_text(encoding="utf-8"))
             return cls(data)
 
         raise ValueError("Unsupported config format. Use .json or .toml")

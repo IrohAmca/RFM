@@ -12,10 +12,14 @@ dependencies = [
     "matplotlib>=3.10.0",
     "ipython>=8.38.0",
     "tqdm>=4.66.0",
+    "openai>=2.29.0",
+    "tomli>=2.0; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+dashboard = ["streamlit>=1.30", "plotly>=5.18"]
+autointerp = ["openai>=1.0", "scikit-learn>=1.4", "pandas>=2.0"]
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu124" }

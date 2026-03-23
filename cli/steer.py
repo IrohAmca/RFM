@@ -7,7 +7,7 @@ from pathlib import Path
 import torch
 
 from rfm.config import ConfigManager
-from rfm.layout import default_checkpoint_path, default_feature_mapping_dir
+from rfm.layout import default_feature_mapping_dir, resolve_best_checkpoint
 from rfm.sae.model import SparseAutoEncoder
 from rfm.steering.patching import activation_patch, batch_feature_patching
 from rfm.steering.emotion_probe import EmotionProbe
@@ -73,20 +73,7 @@ def _load_model_and_sae(config, target):
     mapping_cfg = config.section("feature-mapping") if hasattr(config, "section") else {}
     sae_path = mapping_cfg.get("model_path")
     if not sae_path:
-        default_path = Path(default_checkpoint_path(config, target=target))
-        if default_path.exists():
-            sae_path = str(default_path)
-        else:
-            sweep_val = config.get("sae.sparsity_weight", 0.005)
-            sweep_path = default_path.parent / f"sae_lambda_{sweep_val}.pt"
-            if sweep_path.exists():
-                sae_path = str(sweep_path)
-            else:
-                available = list(default_path.parent.glob("sae_lambda_*.pt"))
-                if available:
-                    sae_path = str(available[0])
-                else:
-                    sae_path = str(default_path)
+        sae_path = resolve_best_checkpoint(config, target=target)
 
     checkpoint = torch.load(sae_path, map_location="cpu", weights_only=False)
     sae_config = checkpoint.get("config", {}).get("sae", {})

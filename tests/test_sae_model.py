@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from rfm.sae.model import SparseAutoEncoder
+from rfm.sae.model import SparseAutoEncoder, TopKSAE, GatedSAE, SAEFactory
 
 
 class TestSparseAutoEncoderForward:
@@ -74,3 +74,72 @@ class TestPreBias:
         model = SparseAutoEncoder(32, 128)
         with pytest.raises(ValueError, match="Expected"):
             model.set_pre_bias(torch.randn(64))
+
+
+class TestTopKSAE:
+    def setup_method(self):
+        self.input_dim = 64
+        self.hidden_dim = 256
+        self.k = 16
+        self.model = TopKSAE(self.input_dim, self.hidden_dim, k=self.k)
+
+    def test_output_shapes(self):
+        x = torch.randn(8, self.input_dim)
+        x_hat, f = self.model(x)
+        assert x_hat.shape == x.shape
+        assert f.shape == (8, self.hidden_dim)
+
+    def test_topk_sparsity(self):
+        x = torch.randn(8, self.input_dim)
+        _, f = self.model(x)
+        
+        # for each item in batch, count non-zero elements
+        non_zeros = (f > 0).sum(dim=1)
+        
+        # At most k elements should be non-zero (could be less if relu zeros them out)
+        assert (non_zeros <= self.k).all()
+
+    def test_features_non_negative(self):
+        x = torch.randn(16, self.input_dim)
+        _, f = self.model(x)
+        assert (f >= 0).all()
+
+
+class TestGatedSAE:
+    def setup_method(self):
+        self.input_dim = 64
+        self.hidden_dim = 256
+        self.model = GatedSAE(self.input_dim, self.hidden_dim)
+
+    def test_output_shapes(self):
+        x = torch.randn(8, self.input_dim)
+        x_hat, f = self.model(x)
+        assert x_hat.shape == x.shape
+        assert f.shape == (8, self.hidden_dim)
+
+    def test_features_non_negative(self):
+        x = torch.randn(16, self.input_dim)
+        _, f = self.model(x)
+        assert (f >= 0).all()
+
+
+class TestSAEFactory:
+    def test_create_vanilla(self):
+        model = SAEFactory.create("vanilla", 64, 256)
+        assert isinstance(model, SparseAutoEncoder)
+        assert not isinstance(model, TopKSAE)
+        assert not isinstance(model, GatedSAE)
+
+    def test_create_topk(self):
+        model = SAEFactory.create("topk", 64, 256, k=16)
+        assert isinstance(model, TopKSAE)
+        assert model.k == 16
+
+    def test_create_gated(self):
+        model = SAEFactory.create("gated", 64, 256)
+        assert isinstance(model, GatedSAE)
+
+    def test_create_unknown_fallback(self):
+        model = SAEFactory.create("unknown_arch", 64, 256)
+        assert isinstance(model, SparseAutoEncoder)
+        assert not isinstance(model, TopKSAE)

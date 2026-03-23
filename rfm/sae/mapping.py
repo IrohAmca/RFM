@@ -8,7 +8,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from rfm.config import ConfigManager
-from rfm.layout import default_checkpoint_path, default_feature_mapping_dir
+from rfm.layout import default_checkpoint_path, default_feature_mapping_dir, resolve_best_checkpoint
 from rfm.sae.model import SparseAutoEncoder
 
 
@@ -392,21 +392,8 @@ if __name__ == "__main__":
             config.set("datasets.path", [str(p) for p in pt_files])
             
         if not config.get("feature-mapping.model_path"):
-            default_path = Path(default_checkpoint_path(base_config, target=target))
-            if default_path.exists():
-                config.set("feature-mapping.model_path", str(default_path))
-            else:
-                sweep_val = config.get("sae.sparsity_weight", 0.005)
-                sweep_path = default_path.parent / f"sae_lambda_{sweep_val}.pt"
-                if sweep_path.exists():
-                    config.set("feature-mapping.model_path", str(sweep_path))
-                else:
-                    available = list(default_path.parent.glob("sae_lambda_*.pt"))
-                    if available:
-                        config.set("feature-mapping.model_path", str(available[0]))
-                        print(f"[mapping] Warning: sae.pt not found. Using {available[0].name}")
-                    else:
-                        config.set("feature-mapping.model_path", str(default_path))
+            best_ckpt = resolve_best_checkpoint(base_config, target=target)
+            config.set("feature-mapping.model_path", best_ckpt)
             
         base_mapping_dir = Path(default_feature_mapping_dir(base_config, target=target))
         if not config.get("feature-mapping.event_output_path"):

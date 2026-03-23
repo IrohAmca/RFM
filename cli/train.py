@@ -16,40 +16,81 @@ def parse_args():
     return parser.parse_args()
 
 
+def _save_model(model, config, save_path):
+    """Save trained model checkpoint."""
+    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+    torch.save({
+        "state_dict": model.state_dict(),
+        "config": config.as_dict(),
+        "history": model.training_history,
+    }, save_path)
+
+
 def _run_sweep(config):
     sae_section = config.section("sae") if hasattr(config, "section") else config.get("sae", {})
-    sweep_lambdas = sae_section.get("sparsity_sweep")
+    architecture = sae_section.get("architecture", "vanilla")
 
     activation_dir = config.get("datasets.path")
     if not activation_dir:
-        raise FileNotFoundError(f"Datasets path not set. Must be injected via main().")
+        raise FileNotFoundError("Datasets path not set. Must be injected via main().")
 
     save_path = config.get("train.save_path")
 
+    # ── TopK: sweep over K values, sparsity_weight is irrelevant ──
+    if architecture == "topk":
+        k_sweep = sae_section.get("topk_k_sweep")
+        if k_sweep:
+            for k_val in k_sweep:
+                print(f"\n{'='*60}")
+                print(f"[sweep] topk_k = {k_val}")
+                print(f"{'='*60}")
+                config.set("sae.topk_k", int(k_val))
+                model = train(config)
+                sweep_save = str(Path(save_path).parent / f"sae_topk_k_{k_val}.pt")
+                _save_model(model, config, sweep_save)
+                print(f"[sweep] Saved → {sweep_save}")
+        else:
+            print(f"[train] Architecture: TopK (k={sae_section.get('topk_k', 32)})")
+            model = train(config)
+            _save_model(model, config, save_path)
+            print(f"[train] Saved → {save_path}")
+        return
+
+    # ── Gated: single run, sparsity_weight is used but sweep is unusual ──
+    if architecture == "gated":
+        sweep_lambdas = sae_section.get("sparsity_sweep")
+        if sweep_lambdas:
+            for lam in sweep_lambdas:
+                print(f"\n{'='*60}")
+                print(f"[sweep] sparsity_weight = {lam}")
+                print(f"{'='*60}")
+                config.set("sae.sparsity_weight", lam)
+                model = train(config)
+                sweep_save = str(Path(save_path).parent / f"sae_lambda_{lam}.pt")
+                _save_model(model, config, sweep_save)
+                print(f"[sweep] Saved → {sweep_save}")
+        else:
+            print(f"[train] Architecture: Gated")
+            model = train(config)
+            _save_model(model, config, save_path)
+            print(f"[train] Saved → {save_path}")
+        return
+
+    # ── Vanilla: sweep over sparsity_weight (lambda) ──
+    sweep_lambdas = sae_section.get("sparsity_sweep")
     if sweep_lambdas:
         for lam in sweep_lambdas:
             print(f"\n{'='*60}")
             print(f"[sweep] sparsity_weight = {lam}")
             print(f"{'='*60}")
             config.set("sae.sparsity_weight", lam)
-
-            sweep_save = str(Path(save_path).parent / f"sae_lambda_{lam}.pt")
             model = train(config)
-            Path(sweep_save).parent.mkdir(parents=True, exist_ok=True)
-            torch.save({
-                "state_dict": model.state_dict(),
-                "config": config.as_dict(),
-                "history": model.training_history,
-            }, sweep_save)
+            sweep_save = str(Path(save_path).parent / f"sae_lambda_{lam}.pt")
+            _save_model(model, config, sweep_save)
             print(f"[sweep] Saved → {sweep_save}")
     else:
         model = train(config)
-        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-        torch.save({
-            "state_dict": model.state_dict(),
-            "config": config.as_dict(),
-            "history": model.training_history,
-        }, save_path)
+        _save_model(model, config, save_path)
         print(f"[train] Saved → {save_path}")
 
 

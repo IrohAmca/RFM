@@ -9,6 +9,15 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Run the full RFM pipeline.")
     parser.add_argument("--config", type=str, required=True, help="Path to config file.")
     parser.add_argument("--skip-viz", action="store_true", help="Skip visualization step.")
+    parser.add_argument("--skip-extract", action="store_true", help="Skip extraction step (use existing activations).")
+    parser.add_argument("--skip-train", action="store_true", help="Skip SAE training step (use existing checkpoints).")
+    parser.add_argument("--skip-mapping", action="store_true", help="Skip feature mapping step.")
+    parser.add_argument(
+        "--from-step",
+        choices=["extract", "train", "mapping", "viz"],
+        default=None,
+        help="Start pipeline from this step onward (skips all earlier steps).",
+    )
     parser.add_argument("--continue-on-error", action="store_true", help="Continue even if a step fails.")
     return parser.parse_args()
 
@@ -31,19 +40,29 @@ def main():
     args = parse_args()
     python = sys.executable
 
-    steps = [
-        ("Extraction", [python, "-m", "cli.extract", "--config", args.config]),
-        ("SAE Training", [python, "-m", "cli.train", "--config", args.config]),
-        ("Feature Mapping", [python, "-m", "rfm.sae.mapping", "--config", args.config]),
+    # --from-step sets skip flags for everything before the chosen step
+    STEP_ORDER = ["extract", "train", "mapping", "viz"]
+    if args.from_step:
+        start_idx = STEP_ORDER.index(args.from_step)
+        if start_idx > STEP_ORDER.index("extract"):
+            args.skip_extract = True
+        if start_idx > STEP_ORDER.index("train"):
+            args.skip_train = True
+        if start_idx > STEP_ORDER.index("mapping"):
+            args.skip_mapping = True
+
+    all_steps = [
+        ("extract",  "Extraction",      not args.skip_extract,  [python, "-m", "cli.extract",      "--config", args.config]),
+        ("train",    "SAE Training",    not args.skip_train,    [python, "-m", "cli.train",         "--config", args.config]),
+        ("mapping",  "Feature Mapping", not args.skip_mapping,  [python, "-m", "rfm.sae.mapping",   "--config", args.config]),
+        ("viz",      "Visualization",   not args.skip_viz,      [python, "-m", "rfm.viz.plots", "--mode", "all", "--config", args.config]),
     ]
 
-    if not args.skip_viz:
-        steps.append(
-            ("Visualization", [python, "-m", "rfm.viz.plots", "--mode", "all", "--config", args.config]),
-        )
-
-    for label, cmd in steps:
-        run_step(label, cmd, continue_on_error=args.continue_on_error)
+    for step_key, label, enabled, cmd in all_steps:
+        if enabled:
+            run_step(label, cmd, continue_on_error=args.continue_on_error)
+        else:
+            print(f"\n[pipeline] Skipping: {label}")
 
     print(f"\n[pipeline] Done.")
 

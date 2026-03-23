@@ -22,7 +22,9 @@ rfm/                  # Main Python package
 ├── layout.py         # Layer-scoped path conventions
 ├── extractors/       # TransformerLens + HuggingFace CausalLM backends
 ├── data/             # Dataset loading and activation chunk management
-├── sae/              # SAE model, training (dead feature analysis), mapping
+├── sae/              # SAE models (Vanilla, TopK, Gated), training (dead feature analysis), mapping
+├── analysis/         # LLM Autointerp and Feature Clustering
+├── dashboard/        # Streamlit interactive analysis dashboard
 ├── steering/         # Feature steering hooks, activation patching, emotion probe
 └── viz/              # Training metrics and mapping visualizations
 
@@ -30,7 +32,8 @@ cli/                  # CLI entry points
 ├── extract.py        # Activation extraction
 ├── train.py          # SAE training (sparsity sweep support)
 ├── pipeline.py       # End-to-end pipeline
-└── steer.py          # Feature steering, patching, emotion discovery
+├── steer.py          # Feature steering, patching, emotion discovery
+└── analyze.py        # Autointerp and Clustering CLI
 
 configs/models/       # Per-model JSON config files
 runs/<model>/         # Model outputs (activations, checkpoints, reports)
@@ -58,9 +61,14 @@ python -m cli.train --config configs/models/gpt2-small.emotion.json
 # 3) Run feature mapping
 python -m rfm.sae.mapping --config configs/models/gpt2-small.emotion.json
 
-# 4) Generate visualizations
-python -m rfm.viz.plots --mode mapping --config configs/models/gpt2-small.emotion.json
-python -m rfm.viz.plots --mode all --config configs/models/gpt2-small.emotion.json
+# 4) Run LLM Auto-interpretation
+uv run python -m cli.analyze autointerp --config configs/models/gpt2-small.emotion.json --top-n 50
+
+# 5) Generate interactive dashboard
+uv run streamlit run rfm/dashboard/app.py
+
+# 6) Generate static visual reports
+uv run python -m rfm.viz.plots --mode all --config configs/models/gpt2-small.emotion.json
 ```
 
 ### Feature Steering
@@ -77,11 +85,19 @@ python -m cli.steer steer \
   --prompt "I feel very"
 
 # Causal validation via activation patching
-python -m cli.steer patch \
+uv run python -m cli.steer patch \
   --config configs/models/gpt2-small.emotion.json \
   --layer blocks.11.hook_resid_post \
   --clean "I feel very happy today" \
   --patch "I feel very sad today"
+```
+
+### Advanced Analysis
+
+```bash
+# Feature Clustering (Cosine similarity between feature decoders)
+uv run python -m cli.analyze cluster --config configs/models/gpt2-small.emotion.json
+
 ```
 
 ## Configuration
@@ -106,6 +122,21 @@ Outputs are automatically organized per layer:
 runs/gpt2-small/activations/blocks_6_hook_resid_post/
 runs/gpt2-small/checkpoints/blocks_6_hook_resid_post/sae.pt
 runs/gpt2-small/reports/feature_mapping/blocks_6_hook_resid_post/
+```
+
+**SAE Architectures:**
+By default, the pipeline trains a Vanilla Sparse Autoencoder with L1 penalty. You can enable state-of-the-art architectures in the configuration:
+- `vanilla` (Standard L1 SAE)
+- `topk` (Anthropic's Top-K sparsity, better reconstruction)
+- `gated` (DeepMind's Gated SAE, decoupled magnitude and gating)
+
+```json
+"sae": {
+  "architecture": "topk",
+  "topk_k": 32,
+  "hidden_dim": 3072,
+  "sparsity_weight": 0.0
+}
 ```
 
 **Supported backends:**

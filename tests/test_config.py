@@ -112,3 +112,21 @@ class TestConfigManagerFromFile:
             f.flush()
             with pytest.raises(ValueError, match="Unsupported"):
                 ConfigManager.from_file(f.name)
+
+    def test_toml_file_loads(self):
+        import tempfile
+
+        toml_content = """
+model_name = "test-model"
+
+[extraction]
+target = "blocks.11.hook_resid_post"
+"""
+        with tempfile.NamedTemporaryFile(suffix=".toml", delete=False) as f:
+            f.write(toml_content.encode("utf-8"))
+            f.flush()
+
+            cfg = ConfigManager.from_file(f.name)
+
+        assert cfg.get("model_name") == "test-model"
+        assert cfg.get("extraction.target") == "blocks.11.hook_resid_post"

@@ -26,21 +26,22 @@
     "dtype": "bfloat16"
   },
   "sae": {
+    "architecture": "topk",
+    "topk_k": 64,
+    "topk_k_sweep": [64, 128],
     "hidden_dim": 12288,
-    "sparsity_weight": 0.005,
-    "sparsity_sweep": [
-      0.0005,
-      0.002,
-      0.005,
-      0.01,
-      0.02
-    ]
+    "sparsity_weight": 0.0
+  },
+  "autointerp": {
+    "contexts_per_feature": 15
   },
   "train": {
     "batch_size": 256,
-    "epochs": 5,
-    "learning_rate": 0.0005,
-    "weight_decay": 0.0,
+    "epochs": 25,
+    "learning_rate": 0.001,
+    "lr_decay_factor": 0.5,
+    "lr_decay_patience": 5,
+    "weight_decay": 1e-4,
     "device": "cuda",
     "validation_split": 0.1,
     "split_seed": 42,
@@ -53,6 +54,6 @@
     "strength_threshold": 0.001,
     "prompt_preview_chars": 180,
     "show_token_progress": true,
-    "count": 3000
+    "count": 5000
   }
 }

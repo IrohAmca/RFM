@@ -1,4 +1,4 @@
-from rfm.sae.model import SparseAutoEncoder
+from rfm.sae.model import SAEFactory
 from rfm.data.loader import BaseDataset
 import torch
 from tqdm import tqdm
@@ -111,10 +111,15 @@ def train(config):
         train_config.get("device", "cuda" if torch.cuda.is_available() else "cpu")
     )
 
-    model = SparseAutoEncoder(
+    architecture = sae_config.get("architecture", "vanilla")
+    k = int(sae_config.get("topk_k", 32))
+
+    model = SAEFactory.create(
+        architecture=architecture,
         input_dim=input_dim,
         hidden_dim=hidden_dim,
         sparsity_weight=sparsity_weight,
+        k=k
     ).to(device)
 
     model.set_pre_bias(dataset.get_mean_activation().to(device))
@@ -124,6 +129,19 @@ def train(config):
         lr=learning_rate,
         weight_decay=weight_decay,
     )
+
+    # Optional LR decay scheduler (ReduceLROnPlateau)
+    lr_decay_factor = float(train_config.get("lr_decay_factor", 1.0))
+    lr_decay_patience = int(train_config.get("lr_decay_patience", 999))
+    scheduler = None
+    if lr_decay_factor < 1.0:
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="min",
+            factor=lr_decay_factor,
+            patience=lr_decay_patience,
+            verbose=True,
+        )
 
     train_loader, val_loader = _make_train_val_loaders(
         dataset.activations,
@@ -187,6 +205,11 @@ def train(config):
             )
 
         history.append(epoch_metrics)
+
+        # Step LR scheduler on validation loss if available
+        if scheduler is not None:
+            sched_loss = epoch_metrics.get("val_loss", epoch_metrics["train_loss"])
+            scheduler.step(sched_loss)
 
         summary = (
             f"epoch={epoch + 1} "

@@ -61,3 +61,42 @@ def default_feature_mapping_dir(config, target=None) -> str:
     if target and _is_multi_layer(config):
         return str(base / sanitize_layer_name(target))
     return str(base)
+
+
+def resolve_best_checkpoint(config, target=None) -> str:
+    """Find the best available SAE checkpoint for a given target layer.
+
+    Priority:
+    1. `sae.pt` (exact path from config/default)
+    2. `sae_topk_k_N.pt` — highest K value (most expressive TopK model)
+    3. `sae_lambda_X.pt` — first available vanilla sweep checkpoint
+    4. Fallback to default path (may not exist)
+    """
+    default_path = Path(default_checkpoint_path(config, target=target))
+
+    if default_path.exists():
+        return str(default_path)
+
+    ckpt_dir = default_path.parent
+
+    # Priority: TopK sweep checkpoints — pick largest K
+    topk_files = list(ckpt_dir.glob("sae_topk_k_*.pt"))
+    if topk_files:
+        def _k_val(p):
+            try:
+                return int(p.stem.split("_")[-1])
+            except ValueError:
+                return 0
+        best = max(topk_files, key=_k_val)
+        print(f"[layout] sae.pt not found. Using best TopK checkpoint: {best.name}")
+        return str(best)
+
+    # Fallback: vanilla lambda sweep checkpoints — pick first
+    lambda_files = sorted(ckpt_dir.glob("sae_lambda_*.pt"))
+    if lambda_files:
+        print(f"[layout] sae.pt not found. Using sweep checkpoint: {lambda_files[0].name}")
+        return str(lambda_files[0])
+
+    # Last resort: return default path even if missing (callers will raise)
+    return str(default_path)
+

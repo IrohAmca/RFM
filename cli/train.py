@@ -6,7 +6,11 @@ from pathlib import Path
 import torch
 
 from rfm.config import ConfigManager
-from rfm.layout import default_activations_dir, default_checkpoint_path
+from rfm.layout import (
+    default_activations_dir,
+    default_checkpoint_path,
+    resolve_requested_targets,
+)
 from rfm.sae.train import train
 
 
@@ -95,10 +99,7 @@ def _run_sweep(config):
 
 
 def _resolve_targets(config):
-    raw = config.get("extraction.target")
-    if isinstance(raw, list):
-        return raw
-    return [raw]
+    return resolve_requested_targets(config)
 
 
 def main():

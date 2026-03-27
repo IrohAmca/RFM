@@ -40,6 +40,7 @@ class FeatureAutoInterp:
         request_delay: float = 0.0,
         max_retries: int = 5,
         retry_base_delay: float = 10.0,
+        system_prompt: str = None,
     ):
         """
         Args:
@@ -52,6 +53,9 @@ class FeatureAutoInterp:
             request_delay: Seconds to wait between successive LLM calls (helps avoid TPM limits).
             max_retries: Maximum number of retries on rate-limit (429) errors.
             retry_base_delay: Base delay in seconds for the first retry; doubles on each attempt.
+            system_prompt: Custom system prompt for the LLM. Defaults to a standard AI
+                           interpretability researcher prompt. Use a safety-focused prompt
+                           when analyzing models for harmful content detection.
         """
         self.events_csv_path = Path(events_csv_path)
         self.backend = backend.lower()
@@ -60,6 +64,7 @@ class FeatureAutoInterp:
         self.request_delay = request_delay
         self.max_retries = max_retries
         self.retry_base_delay = retry_base_delay
+        self.system_prompt = system_prompt or "You are an AI interpretability researcher."
         self.client = None
 
         if self.backend not in ("openai",):
@@ -175,7 +180,7 @@ class FeatureAutoInterp:
                 response = self._get_client().chat.completions.create(
                     model=model,
                     messages=[
-                        {"role": "system", "content": "You are an AI interpretability researcher."},
+                        {"role": "system", "content": self.system_prompt},
                         {"role": "user", "content": prompt}
                     ],
                     temperature=0.1,

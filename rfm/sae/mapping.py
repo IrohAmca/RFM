@@ -8,7 +8,12 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from rfm.config import ConfigManager
-from rfm.layout import default_checkpoint_path, default_feature_mapping_dir, resolve_best_checkpoint
+from rfm.layout import (
+    default_checkpoint_path,
+    default_feature_mapping_dir,
+    resolve_best_checkpoint,
+    resolve_requested_targets,
+)
 from rfm.sae.model import SparseAutoEncoder
 
 
@@ -361,10 +366,7 @@ class FeatureMapping:
 
 
 def _resolve_targets(config):
-    raw = config.get("extraction.target")
-    if isinstance(raw, list):
-        return raw
-    return [raw]
+    return resolve_requested_targets(config)
 
 
 if __name__ == "__main__":

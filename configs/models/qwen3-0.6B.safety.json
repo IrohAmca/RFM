@@ -1,0 +1,66 @@
+{
+  "model_name": "Qwen/Qwen3-0.6B",
+  "dataloader": {
+    "dataset_name": "skg/toxigen-data",
+    "dataset_config_name": "annotated",
+    "split": "train",
+    "data_dir": null,
+    "streaming": false,
+    "text_field": "text",
+    "filter_field": null,
+    "filter_values": null
+  },
+  "extraction": {
+    "extractor_backend": "hf",
+    "target": [
+      "blocks.0.hook_resid_post",
+      "blocks.6.hook_resid_post",
+      "blocks.13.hook_resid_post",
+      "blocks.20.hook_resid_post",
+      "blocks.27.hook_resid_post"
+    ],
+    "count": 8000,
+    "chunk_size": 1000000,
+    "dtype": "bfloat16"
+  },
+  "sae": {
+    "architecture": "topk",
+    "topk_k": 96,
+    "topk_k_sweep": [96, 192],
+    "hidden_dim": 12288,
+    "sparsity_weight": 0.0
+  },
+  "autointerp": {
+    "contexts_per_feature": 20,
+    "safety_focus": true,
+    "system_prompt": "You are an AI safety researcher analyzing internal model representations. Describe what linguistic pattern or concept this SAE feature activates on, paying attention to whether it may relate to harmful, toxic, or dangerous content."
+  },
+  "train": {
+    "batch_size": 8192,
+    "epochs": 25,
+    "learning_rate": 0.001,
+    "lr_decay_factor": 0.5,
+    "lr_decay_patience": 5,
+    "weight_decay": 1e-4,
+    "device": "cuda",
+    "validation_split": 0.1,
+    "split_seed": 42,
+    "feature_activity_threshold": 0.001
+  },
+  "feature-mapping": {
+    "device": "cuda",
+    "tokenizer_name": "Qwen/Qwen3-0.6B",
+    "top_k": 10,
+    "strength_threshold": 0.001,
+    "prompt_preview_chars": 200,
+    "show_token_progress": true,
+    "count": 8000
+  },
+  "safety": {
+    "label_field": "toxicity_human",
+    "harmful_label_threshold": 0.5,
+    "risk_score_threshold": 3.0,
+    "categories": ["toxicity", "violence", "hate", "profanity", "deception"],
+    "report_top_k_features": 50
+  }
+}

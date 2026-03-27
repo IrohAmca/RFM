@@ -55,6 +55,7 @@ python -m cli.pipeline --config configs/models/gpt2-small.emotion.json
 python -m cli.pipeline --config configs/models/gpt2-small.emotion.json --skip-viz
 python -m cli.pipeline --config configs/models/gpt2-small.emotion.json --skip-extract --skip-train
 python -m cli.pipeline --config configs/models/gpt2-small.emotion.json --from-step mapping
+uv run python -m cli.pipeline --config configs/models/qwen3-0.6B.safety.json --from-hook 27
 ```
 
 ### Step by Step
@@ -161,6 +162,9 @@ runs/gpt2-small/activations/blocks_6_hook_resid_post/
 runs/gpt2-small/checkpoints/blocks_6_hook_resid_post/sae.pt
 runs/gpt2-small/reports/feature_mapping/blocks_6_hook_resid_post/
 ```
+
+To resume a multi-layer pipeline from a later hook without re-running earlier hooks, use `--from-hook`.
+It accepts either the exact target string or just the layer index, for example `--from-hook blocks.27.hook_resid_post` or `--from-hook 27`.
 
 **SAE Architectures:**
 By default, the pipeline trains a Vanilla Sparse Autoencoder with L1 penalty. You can enable state-of-the-art architectures in the configuration:

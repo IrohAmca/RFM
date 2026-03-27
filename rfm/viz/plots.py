@@ -10,6 +10,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
+from rfm.layout import resolve_requested_targets
+
 DEFAULT_METRICS = [
     "train_loss",
     "train_recon",
@@ -428,12 +430,7 @@ def build_mapping_sequence_timeline(events_rows, output_path: Path):
 
 
 def _resolve_targets(config):
-    raw = config.get("extraction.target")
-    if isinstance(raw, list):
-        return raw
-    if raw:
-        return [raw]
-    return ["blocks.0.hook_resid_post"]
+    return resolve_requested_targets(config)
 
 
 def _mode_output_dir(base_config, mode, target, override_dir):

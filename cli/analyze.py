@@ -82,12 +82,17 @@ def compute_autointerp(
 
         print(f"[autointerp] Target layer: {target}")
         print(f"Loading events from {events_csv}...")
+
+        # Use custom system prompt from config if defined (e.g. safety-focused prompt)
+        system_prompt = config.get("autointerp.system_prompt", None)
+
         interp = FeatureAutoInterp(
             events_csv,
             backend="openai",
             api_key=api_key,
             base_url=base_url,
             request_delay=request_delay,
+            system_prompt=system_prompt,
         )
 
         top_k_contexts = config.get("autointerp.contexts_per_feature", 15)

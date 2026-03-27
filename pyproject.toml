@@ -19,7 +19,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 dashboard = ["streamlit>=1.30", "plotly>=5.18"]
-autointerp = ["openai>=1.0", "scikit-learn>=1.4", "pandas>=2.0"]
+autointerp = ["openai>=1.0", "scikit-learn>=1.4", "pandas>=2.0", "scipy>=1.11"]
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu124" }

@@ -7,6 +7,8 @@ from rfm.layout import (
     default_checkpoint_path,
     default_feature_mapping_dir,
     _is_multi_layer,
+    resolve_requested_targets,
+    select_targets_from,
 )
 from rfm.config import ConfigManager
 
@@ -53,6 +55,58 @@ class TestMultiLayerDetection:
     def test_single_element_list_is_not_multi(self):
         cfg = ConfigManager({"extraction": {"target": ["blocks.0.hook_resid_post"]}})
         assert not _is_multi_layer(cfg)
+
+    def test_pipeline_from_hook_keeps_multi_layer_layout(self):
+        cfg = ConfigManager({
+            "model_name": "gpt2-small",
+            "extraction": {
+                "target": [
+                    "blocks.0.hook_resid_post",
+                    "blocks.6.hook_resid_post",
+                ]
+            },
+            "pipeline": {"from_hook": "6"},
+        })
+        assert _is_multi_layer(cfg)
+        assert "blocks_6_hook_resid_post" in default_activations_dir(cfg, target="blocks.6.hook_resid_post")
+
+
+class TestRequestedTargets:
+    def test_exact_hook_match(self):
+        cfg = ConfigManager({
+            "extraction": {
+                "target": [
+                    "blocks.0.hook_resid_post",
+                    "blocks.6.hook_resid_post",
+                    "blocks.11.hook_resid_post",
+                ]
+            },
+            "pipeline": {"from_hook": "blocks.6.hook_resid_post"},
+        })
+        assert resolve_requested_targets(cfg) == [
+            "blocks.6.hook_resid_post",
+            "blocks.11.hook_resid_post",
+        ]
+
+    def test_numeric_hook_match(self):
+        cfg = ConfigManager({
+            "extraction": {
+                "target": [
+                    "blocks.0.hook_resid_post",
+                    "blocks.6.hook_resid_post",
+                    "blocks.11.hook_resid_post",
+                ]
+            },
+            "pipeline": {"from_hook": "11"},
+        })
+        assert resolve_requested_targets(cfg) == ["blocks.11.hook_resid_post"]
+
+    def test_missing_hook_raises(self):
+        with pytest.raises(ValueError, match="not found"):
+            select_targets_from(
+                ["blocks.0.hook_resid_post", "blocks.6.hook_resid_post"],
+                "27",
+            )
 
 
 class TestDefaultPaths:

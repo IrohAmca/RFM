@@ -10,7 +10,13 @@ from tqdm import tqdm
 from rfm.config import ConfigManager
 from rfm.extractors import ExtractorFactory
 from rfm.data import BaseDataLoader
-from rfm.layout import default_activations_dir, sanitize_layer_name, sanitize_model_name
+from rfm.layout import (
+    default_activations_dir,
+    is_multi_layer_config,
+    resolve_requested_targets,
+    sanitize_layer_name,
+    sanitize_model_name,
+)
 
 
 def resolve_dtype(name):
@@ -60,10 +66,7 @@ def flush_chunk(buffer_acts, buffer_tks, buffer_lens, target, model_name, chunk_
 
 
 def _resolve_targets(config):
-    raw = config.get("extraction.target")
-    if isinstance(raw, list):
-        return raw
-    return [raw]
+    return resolve_requested_targets(config)
 
 
 def extract_single_target(target, extractor, dataloader, config):
@@ -75,10 +78,8 @@ def extract_single_target(target, extractor, dataloader, config):
 
     output_dir = config.get("extraction.output_dir", ".")
     if output_dir in (None, "", "."):
-        output_dir = default_activations_dir(config)
-
-    targets = _resolve_targets(config)
-    if len(targets) > 1:
+        output_dir = default_activations_dir(config, target=target)
+    elif is_multi_layer_config(config):
         output_dir = str(Path(output_dir) / sanitize_layer_name(target))
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)

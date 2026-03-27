@@ -146,11 +146,14 @@ def default_checkpoint_path(config, target=None) -> str:
 
 
 def resolve_checkpoint_path(config, target=None) -> str:
-    configured = _config_get(config, "train.save_path")
-    if not configured:
-        configured = _config_get(config, "train.output_model_path")
-    if configured:
-        return str(configured)
+    configured_save_path = _config_get(config, "train.save_path")
+    if configured_save_path:
+        return str(configured_save_path)
+
+    configured_output_path = _config_get(config, "train.output_model_path")
+    if configured_output_path:
+        return str(configured_output_path)
+
     return default_checkpoint_path(config, target=target)
 
 

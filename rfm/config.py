@@ -50,7 +50,7 @@ DEFAULT_CONFIG = {
         "validation_split": 0.1,
         "split_seed": 42,
         "feature_activity_threshold": 1e-3,
-        "output_model_path": "checkpoints/sae.pt",
+        "output_model_path": None,
     },
 }
 

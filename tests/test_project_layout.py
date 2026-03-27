@@ -7,6 +7,7 @@ from rfm.layout import (
     default_checkpoint_path,
     default_feature_mapping_dir,
     resolve_activations_dir,
+    resolve_checkpoint_path,
     _is_multi_layer,
     resolve_requested_targets,
     select_targets_from,
@@ -184,6 +185,28 @@ class TestDefaultPaths:
         path = default_checkpoint_path(cfg, target="blocks.11.hook_resid_post")
         assert "blocks_11_hook_resid_post" in path
         assert path.endswith("sae.pt")
+
+    def test_resolve_checkpoint_path_defaults_to_runs_layout(self):
+        cfg = ConfigManager({
+            "model_name": "Qwen/Qwen3-0.6B",
+            "layers": {
+                "blocks.6.hook_resid_post": {},
+                "blocks.13.hook_resid_post": {},
+            },
+        })
+        target_cfg = cfg.for_target("blocks.13.hook_resid_post")
+
+        path = resolve_checkpoint_path(target_cfg, target="blocks.13.hook_resid_post")
+
+        assert path.endswith("runs\\Qwen_Qwen3-0.6B\\checkpoints\\blocks_13_hook_resid_post\\sae.pt")
+
+    def test_resolve_checkpoint_path_uses_explicit_output_model_path(self):
+        cfg = ConfigManager({
+            "model_name": "gpt2-small",
+            "train": {"output_model_path": "custom\\sae.pt"},
+        })
+
+        assert resolve_checkpoint_path(cfg) == "custom\\sae.pt"
 
     def test_feature_mapping_dir(self):
         cfg = ConfigManager({"model_name": "gpt2-small"})

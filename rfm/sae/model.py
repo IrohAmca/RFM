@@ -180,3 +180,49 @@ class SAEFactory:
         sae_cls = cls.REGISTRY[arch_lower]
         # pass kwargs to handle differences between architectures
         return sae_cls(input_dim=input_dim, hidden_dim=hidden_dim, **kwargs)
+
+
+def build_sae(input_dim, hidden_dim, sae_config=None):
+    sae_config = sae_config or {}
+    architecture = str(sae_config.get("architecture", "vanilla")).lower()
+    sparsity_weight = float(sae_config.get("sparsity_weight", 1e-3))
+
+    kwargs = {}
+    if architecture == "topk":
+        kwargs["k"] = int(sae_config.get("topk_k", 32))
+        kwargs["aux_alpha"] = float(sae_config.get("aux_alpha", 1 / 32))
+    else:
+        kwargs["sparsity_weight"] = sparsity_weight
+
+    return SAEFactory.create(
+        architecture=architecture,
+        input_dim=int(input_dim),
+        hidden_dim=int(hidden_dim),
+        **kwargs,
+    )
+
+
+def load_sae_checkpoint(path, device=None, expected_input_dim=None):
+    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+    state_dict = checkpoint.get("state_dict")
+    if not isinstance(state_dict, dict):
+        raise ValueError(f"Checkpoint {path} does not contain a valid state_dict.")
+
+    if "b_pre" not in state_dict or "b_enc" not in state_dict:
+        raise ValueError(f"Checkpoint {path} is missing required SAE parameters.")
+
+    input_dim = int(state_dict["b_pre"].shape[0])
+    hidden_dim = int(state_dict["b_enc"].shape[0])
+
+    if expected_input_dim is not None and input_dim != int(expected_input_dim):
+        raise ValueError(
+            f"Checkpoint {path} expects input_dim={input_dim}, but activations have input_dim={expected_input_dim}."
+        )
+
+    checkpoint_config = checkpoint.get("config", {}) if isinstance(checkpoint, dict) else {}
+    sae_config = checkpoint_config.get("sae", {}) if isinstance(checkpoint_config, dict) else {}
+    model = build_sae(input_dim=input_dim, hidden_dim=hidden_dim, sae_config=sae_config)
+    model.load_state_dict(state_dict)
+    if device is not None:
+        model = model.to(device)
+    return model, checkpoint

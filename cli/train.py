@@ -121,7 +121,7 @@ def main():
             raise FileNotFoundError(f"No activation files found in {act_dir}")
         config.set("datasets.path", [str(p) for p in pt_files])
         
-        save_path = config.get("train.save_path") or config.get("train.output_model_path")
+        save_path = config.get("train.save_path")
         if not save_path:
             save_path = resolve_checkpoint_path(config, target=target)
         config.set("train.save_path", save_path)

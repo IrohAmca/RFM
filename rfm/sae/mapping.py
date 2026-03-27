@@ -14,7 +14,7 @@ from rfm.layout import (
     resolve_best_checkpoint,
     resolve_requested_targets,
 )
-from rfm.sae.model import SparseAutoEncoder
+from rfm.sae.model import build_sae, load_sae_checkpoint
 
 
 class FeatureMapping:
@@ -158,23 +158,19 @@ class FeatureMapping:
                     global_token_idx += 1
                 global_sequence_idx += 1
 
-    def get_model_config(self, model_path):
-        base_config = torch.load(model_path, map_location="cpu", weights_only=False).get("config", {})
-        if not base_config:
-            raise ValueError(f"Model checkpoint at {model_path} does not contain config information.")
-        return base_config.get("sae", {})
-
     def load_sae_model(self, input_dim):
         model_path = self._cfg_section("feature-mapping").get("model_path")
-        checkpoint_config = self.get_model_config(model_path) if model_path else {}
-
-        hidden_dim = int(checkpoint_config.get("hidden_dim", self._cfg_section("sae").get("hidden_dim", 128)))
-        sparsity_weight = checkpoint_config.get("sparsity_weight", 1e-3)
-
-        model = SparseAutoEncoder(input_dim, hidden_dim, sparsity_weight)
         if model_path:
-            model.load_model(model_path, device=self.device)
-        return model.to(self.device)
+            model, _ = load_sae_checkpoint(
+                model_path,
+                device=self.device,
+                expected_input_dim=input_dim,
+            )
+            return model
+
+        sae_config = self._cfg_section("sae")
+        hidden_dim = int(sae_config.get("hidden_dim", 128))
+        return build_sae(input_dim=input_dim, hidden_dim=hidden_dim, sae_config=sae_config).to(self.device)
 
     def infer_input_dim(self):
         first_path = self._dataset_paths()[0]

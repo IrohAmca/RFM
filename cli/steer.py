@@ -8,7 +8,7 @@ import torch
 
 from rfm.config import ConfigManager
 from rfm.layout import default_feature_mapping_dir, resolve_best_checkpoint, resolve_requested_targets
-from rfm.sae.model import SparseAutoEncoder
+from rfm.sae.model import load_sae_checkpoint
 from rfm.steering.patching import activation_patch, batch_feature_patching
 from rfm.steering.emotion_probe import EmotionProbe
 
@@ -70,14 +70,7 @@ def _load_model_and_sae(config, target):
     if not sae_path:
         sae_path = resolve_best_checkpoint(config, target=target)
 
-    checkpoint = torch.load(sae_path, map_location="cpu", weights_only=False)
-    sae_config = checkpoint.get("config", {}).get("sae", {})
-    input_dim = checkpoint["state_dict"]["b_pre"].shape[0]
-    hidden_dim = int(sae_config.get("hidden_dim", 3072))
-
-    sae_model = SparseAutoEncoder(input_dim, hidden_dim)
-    sae_model.load_state_dict(checkpoint["state_dict"])
-    sae_model.to(device)
+    sae_model, _ = load_sae_checkpoint(sae_path, device=device)
     sae_model.eval()
 
     return hf_model, tokenizer, sae_model

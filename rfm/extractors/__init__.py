@@ -2,6 +2,7 @@
 
 from rfm.extractors.transformer_lens import GPT2Extractor
 from rfm.extractors.hf_causal import HFCausalExtractor
+from rfm.extractors.hf_generate import HFGenerationExtractor
 
 
 class ExtractorFactory:
@@ -18,7 +19,10 @@ class ExtractorFactory:
         if str(backend).lower() in {"hf", "huggingface", "hf_causal"}:
             return HFCausalExtractor(config)
 
+        if str(backend).lower() in {"hf_generate", "generate"}:
+            return HFGenerationExtractor(config)
+
         return GPT2Extractor(config)
 
 
-__all__ = ["ExtractorFactory", "GPT2Extractor", "HFCausalExtractor"]
+__all__ = ["ExtractorFactory", "GPT2Extractor", "HFCausalExtractor", "HFGenerationExtractor"]

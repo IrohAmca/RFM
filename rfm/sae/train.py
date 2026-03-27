@@ -1,3 +1,5 @@
+import math
+
 from rfm.sae.model import SAEFactory
 from rfm.data.loader import BaseDataset
 import torch
@@ -106,6 +108,8 @@ def train(config):
     val_split = float(train_config.get("validation_split", 0.1))
     split_seed = int(train_config.get("split_seed", 42))
     active_threshold = float(train_config.get("feature_activity_threshold", 1e-3))
+    grad_clip_norm = float(train_config.get("grad_clip_norm", 1.0))
+    warmup_epochs = int(train_config.get("warmup_epochs", 5))
 
     device = torch.device(
         train_config.get("device", "cuda" if torch.cuda.is_available() else "cpu")
@@ -113,13 +117,15 @@ def train(config):
 
     architecture = sae_config.get("architecture", "vanilla")
     k = int(sae_config.get("topk_k", 32))
+    aux_alpha = float(sae_config.get("aux_alpha", 1/32))
 
     model = SAEFactory.create(
         architecture=architecture,
         input_dim=input_dim,
         hidden_dim=hidden_dim,
         sparsity_weight=sparsity_weight,
-        k=k
+        k=k,
+        aux_alpha=aux_alpha,
     ).to(device)
 
     model.set_pre_bias(dataset.get_mean_activation().to(device))
@@ -130,18 +136,38 @@ def train(config):
         weight_decay=weight_decay,
     )
 
-    # Optional LR decay scheduler (ReduceLROnPlateau)
+    # LR schedule: linear warm-up then cosine decay
     lr_decay_factor = float(train_config.get("lr_decay_factor", 1.0))
     lr_decay_patience = int(train_config.get("lr_decay_patience", 999))
+    use_cosine = bool(train_config.get("cosine_decay", True))
     scheduler = None
-    if lr_decay_factor < 1.0:
+    scheduler_is_plateau = False
+
+    if use_cosine and epochs > warmup_epochs:
+        warmup_sched = torch.optim.lr_scheduler.LinearLR(
+            optimizer,
+            start_factor=1e-2,
+            end_factor=1.0,
+            total_iters=warmup_epochs,
+        )
+        cosine_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=epochs - warmup_epochs,
+            eta_min=learning_rate * 0.01,
+        )
+        scheduler = torch.optim.lr_scheduler.SequentialLR(
+            optimizer,
+            schedulers=[warmup_sched, cosine_sched],
+            milestones=[warmup_epochs],
+        )
+    elif lr_decay_factor < 1.0:
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
             mode="min",
             factor=lr_decay_factor,
             patience=lr_decay_patience,
-            verbose=True,
         )
+        scheduler_is_plateau = True
 
     train_loader, val_loader = _make_train_val_loaders(
         dataset.activations,
@@ -169,6 +195,8 @@ def train(config):
 
             optimizer.zero_grad(set_to_none=True)
             total_loss.backward()
+            if grad_clip_norm > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip_norm)
             optimizer.step()
             model.normalize_decoder_columns()
 
@@ -206,10 +234,13 @@ def train(config):
 
         history.append(epoch_metrics)
 
-        # Step LR scheduler on validation loss if available
+        # Step LR scheduler
         if scheduler is not None:
-            sched_loss = epoch_metrics.get("val_loss", epoch_metrics["train_loss"])
-            scheduler.step(sched_loss)
+            if scheduler_is_plateau:
+                sched_loss = epoch_metrics.get("val_loss", epoch_metrics["train_loss"])
+                scheduler.step(sched_loss)
+            else:
+                scheduler.step()
 
         summary = (
             f"epoch={epoch + 1} "

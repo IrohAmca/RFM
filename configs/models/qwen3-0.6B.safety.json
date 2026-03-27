@@ -12,23 +12,71 @@
   },
   "extraction": {
     "extractor_backend": "hf",
-    "target": [
-      "blocks.0.hook_resid_post",
-      "blocks.6.hook_resid_post",
-      "blocks.13.hook_resid_post",
-      "blocks.20.hook_resid_post",
-      "blocks.27.hook_resid_post"
-    ],
     "count": 8000,
     "chunk_size": 1000000,
     "dtype": "bfloat16"
+  },
+  "layers": {
+    "blocks.6.hook_resid_post": {
+      "sae": {
+        "hidden_dim": 8192,
+        "topk_k_sweep": [64, 128]
+      },
+      "train": {
+        "batch_size": 4096,
+        "epochs": 50,
+        "learning_rate": 0.0001,
+        "warmup_epochs": 8,
+        "grad_clip_norm": 1.0
+      }
+    },
+    "blocks.13.hook_resid_post": {
+      "sae": {
+        "hidden_dim": 16384,
+        "topk_k_sweep": [128, 256]
+      },
+      "train": {
+        "batch_size": 4096,
+        "epochs": 50,
+        "learning_rate": 0.0002,
+        "warmup_epochs": 8,
+        "grad_clip_norm": 1.0
+      }
+    },
+    "blocks.20.hook_resid_post": {
+      "sae": {
+        "hidden_dim": 24576,
+        "topk_k_sweep": [256, 384]
+      },
+      "train": {
+        "batch_size": 4096,
+        "epochs": 50,
+        "learning_rate": 0.0003,
+        "warmup_epochs": 5,
+        "grad_clip_norm": 1.0
+      }
+    },
+    "blocks.27.hook_resid_post": {
+      "sae": {
+        "hidden_dim": 32768,
+        "topk_k_sweep": [512, 768]
+      },
+      "train": {
+        "batch_size": 2048,
+        "epochs": 50,
+        "learning_rate": 0.0002,
+        "warmup_epochs": 5,
+        "grad_clip_norm": 1.0
+      }
+    }
   },
   "sae": {
     "architecture": "topk",
     "topk_k": 96,
     "topk_k_sweep": [96, 192],
     "hidden_dim": 12288,
-    "sparsity_weight": 0.0
+    "sparsity_weight": 0.0,
+    "aux_alpha": 0.03125
   },
   "autointerp": {
     "contexts_per_feature": 20,
@@ -39,8 +87,9 @@
     "batch_size": 8192,
     "epochs": 25,
     "learning_rate": 0.001,
-    "lr_decay_factor": 0.5,
-    "lr_decay_patience": 5,
+    "cosine_decay": true,
+    "warmup_epochs": 5,
+    "grad_clip_norm": 1.0,
     "weight_decay": 1e-4,
     "device": "cuda",
     "validation_split": 0.1,

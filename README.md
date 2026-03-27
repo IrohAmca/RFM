@@ -143,17 +143,26 @@ uv run python -m cli.analyze autointerp --config configs/models/gpt2-small.emoti
 
 Each model gets its own config file; all outputs are isolated under `runs/<model>/`.
 
-**Multi-layer extraction** — set `extraction.target` to a list:
+**Layer-based config** — define targets under a top-level `layers` object. Each key is a hook target, and each layer entry can override sections like `sae`, `train`, `feature-mapping`, `autointerp`, or `extraction`:
 
 ```json
-"extraction": {
-  "target": [
-    "blocks.0.hook_resid_post",
-    "blocks.6.hook_resid_post",
-    "blocks.11.hook_resid_post"
-  ]
+"layers": {
+  "blocks.0.hook_resid_post": {},
+  "blocks.6.hook_resid_post": {
+    "sae": {
+      "hidden_dim": 16384,
+      "topk_k_sweep": [192, 384]
+    },
+    "train": {
+      "epochs": 40,
+      "learning_rate": 0.0003
+    }
+  },
+  "blocks.11.hook_resid_post": {}
 }
 ```
+
+Global top-level sections remain defaults; layer-local sections are merged on top for the active target. Legacy `extraction.target` is still supported, but new configs should prefer `layers`.
 
 Outputs are automatically organized per layer:
 
@@ -180,6 +189,44 @@ By default, the pipeline trains a Vanilla Sparse Autoencoder with L1 penalty. Yo
   "sparsity_weight": 0.0
 }
 ```
+
+**Per-layer tuning:** deeper hooks often need different capacity and optimization settings. Put those directly under the corresponding layer entry:
+
+```json
+"sae": {
+  "architecture": "topk",
+  "topk_k": 96,
+  "topk_k_sweep": [96, 192],
+  "hidden_dim": 12288
+},
+"train": {
+  "batch_size": 8192,
+  "epochs": 25,
+  "learning_rate": 0.001
+},
+"layers": {
+  "blocks.13.hook_resid_post": {
+    "sae": {
+      "hidden_dim": 16384,
+      "topk_k_sweep": [192, 384]
+    },
+    "train": {
+      "batch_size": 4096,
+      "epochs": 40,
+      "learning_rate": 0.0003
+    }
+  },
+  "blocks.27.hook_resid_post": {
+    "train": {
+      "batch_size": 2048,
+      "epochs": 50,
+      "learning_rate": 0.0002
+    }
+  }
+}
+```
+
+This keeps shallow layers cheap while letting harder high layers use larger dictionaries, larger `k`, and slower optimization without splitting configs across multiple files.
 
 **Supported backends:**
 - `transformer_lens` (default) — GPT-2 and other TransformerLens-compatible models

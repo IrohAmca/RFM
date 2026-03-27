@@ -59,38 +59,64 @@ class SparseAutoEncoder(torch.nn.Module):
 class TopKSAE(SparseAutoEncoder):
     """TopK Sparse Autoencoder (Anthropic).
     
-    Instead of L1 penalty, it enforces sparsity by keeping only the top-k activations and zeroing out the rest.
+    Instead of L1 penalty, it enforces sparsity by keeping only the top-k
+    activations and zeroing out the rest.  Includes auxiliary dead-feature
+    resurrection loss following Anthropic's approach.
     """
-    def __init__(self, input_dim, hidden_dim, k=32, **kwargs):
-        # TopK doesn't use L1 sparsity weight during loss
+    def __init__(self, input_dim, hidden_dim, k=32, aux_alpha=1/32, **kwargs):
         super().__init__(input_dim, hidden_dim, sparsity_weight=0.0)
         self.k = int(k)
+        self.aux_alpha = float(aux_alpha)
+        # Track which features were active during the last forward pass
+        # so compute_loss can build the auxiliary term without re-encoding.
+        self._last_h = None
+        self._last_topk_idx = None
 
     def forward(self, x):
         x_centered = x - self.b_pre
         h = x_centered @ self.W_enc + self.b_enc
-        
+
         # Keep only top-k activations
         topk_vals, topk_idx = torch.topk(h, self.k, dim=-1)
         f = torch.zeros_like(h)
         f.scatter_(-1, topk_idx, F.relu(topk_vals))
-        
+
         x_hat_centered = f @ self.W_dec
         x_hat = x_hat_centered + self.b_pre
+
+        # Store for auxiliary loss (avoids recomputing the encoder pass)
+        self._last_h = h
+        self._last_topk_idx = topk_idx
+
         return x_hat, f
 
     def compute_loss(self, x, x_hat, f):
         recon_loss = F.mse_loss(x_hat, x)
-        
-        # Auxiliary loss: to resurrect dead features (optional but recommended for TopK)
-        # Here we just return 0 for auxiliary loss to keep it simple, but we can add it later
+
+        # ── Auxiliary dead-feature resurrection loss ──────────────────
+        # Idea (Anthropic, 2024): reconstruct from the *non-top-k*
+        # features so that dead neurons receive a gradient pointing
+        # toward the highest-error input directions.
         aux_loss = torch.tensor(0.0, device=x.device)
-        total_loss = recon_loss + aux_loss
-        
-        # We return sparse loss as 0 to match the API
-        sparsity_loss = torch.tensor(0.0, device=x.device) 
-        
-        return total_loss, recon_loss, sparsity_loss
+        if self.training and self._last_h is not None and self.aux_alpha > 0:
+            h = self._last_h
+            topk_idx = self._last_topk_idx
+
+            # Mask out the top-k positions → keep only "dead / unused" pre-activations
+            dead_mask = torch.ones_like(h, dtype=torch.bool)
+            dead_mask.scatter_(-1, topk_idx, False)
+
+            dead_h = h * dead_mask.float()
+            dead_f = F.relu(dead_h)
+
+            # Reconstruct from dead features only
+            dead_recon = dead_f @ self.W_dec + self.b_pre
+            aux_loss = F.mse_loss(dead_recon, x)
+
+        total_loss = recon_loss + self.aux_alpha * aux_loss
+
+        # Return aux_loss in the "sparsity" slot so it gets logged
+        return total_loss, recon_loss, aux_loss
 
 
 class GatedSAE(SparseAutoEncoder):

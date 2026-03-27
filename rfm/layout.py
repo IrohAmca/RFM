@@ -49,10 +49,13 @@ def model_slug(config) -> str:
 def resolve_all_targets(config):
     """Return the full configured list of target layers."""
     raw = _config_get(config, "extraction.target")
-    if isinstance(raw, list):
+    if isinstance(raw, list) and raw:
         return raw
-    if raw:
+    if isinstance(raw, str) and raw.strip():
         return [raw]
+    layer_cfgs = _config_get(config, "layers", {})
+    if isinstance(layer_cfgs, dict) and layer_cfgs:
+        return list(layer_cfgs.keys())
     return [DEFAULT_TARGET]
 
 
@@ -107,6 +110,9 @@ def resolve_requested_targets(config):
 
 
 def _is_multi_layer(config) -> bool:
+    layer_cfgs = _config_get(config, "layers", {})
+    if isinstance(layer_cfgs, dict) and len(layer_cfgs) > 1:
+        return True
     return len(resolve_all_targets(config)) > 1
 
 
@@ -121,11 +127,31 @@ def default_activations_dir(config, target=None) -> str:
     return str(base)
 
 
+def resolve_activations_dir(config, target=None) -> str:
+    output_dir = _config_get(config, "extraction.output_dir")
+    if output_dir in (None, "", "."):
+        return default_activations_dir(config, target=target)
+
+    path = Path(output_dir)
+    if target and _is_multi_layer(config):
+        path = path / sanitize_layer_name(target)
+    return str(path)
+
+
 def default_checkpoint_path(config, target=None) -> str:
     base = Path("runs") / model_slug(config) / "checkpoints"
     if target and _is_multi_layer(config):
         return str(base / sanitize_layer_name(target) / "sae.pt")
     return str(base / "sae.pt")
+
+
+def resolve_checkpoint_path(config, target=None) -> str:
+    configured = _config_get(config, "train.save_path")
+    if not configured:
+        configured = _config_get(config, "train.output_model_path")
+    if configured:
+        return str(configured)
+    return default_checkpoint_path(config, target=target)
 
 
 def default_feature_mapping_dir(config, target=None) -> str:
@@ -144,7 +170,7 @@ def resolve_best_checkpoint(config, target=None) -> str:
     3. `sae_lambda_X.pt` — first available vanilla sweep checkpoint
     4. Fallback to default path (may not exist)
     """
-    default_path = Path(default_checkpoint_path(config, target=target))
+    default_path = Path(resolve_checkpoint_path(config, target=target))
 
     if default_path.exists():
         return str(default_path)

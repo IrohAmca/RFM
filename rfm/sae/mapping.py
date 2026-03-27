@@ -9,8 +9,8 @@ from transformers import AutoTokenizer
 
 from rfm.config import ConfigManager
 from rfm.layout import (
-    default_checkpoint_path,
     default_feature_mapping_dir,
+    resolve_activations_dir,
     resolve_best_checkpoint,
     resolve_requested_targets,
 )
@@ -50,13 +50,12 @@ class FeatureMapping:
         if isinstance(paths, str):
             paths = [paths]
         if not paths:
-            from rfm.layout import default_activations_dir
-            act_dir = default_activations_dir(self.config)
+            act_dir = resolve_activations_dir(self.config, target=self._cfg_value("extraction.target"))
             pt_files = sorted(Path(act_dir).glob("*.pt"))
             paths = [str(p) for p in pt_files]
             
         if not isinstance(paths, list) or not paths:
-            act_dir = default_activations_dir(self.config)
+            act_dir = resolve_activations_dir(self.config, target=self._cfg_value("extraction.target"))
             raise ValueError(f"Could not find activation files in {act_dir} or config.datasets.path")
         return paths
 
@@ -309,7 +308,7 @@ class FeatureMapping:
         event_output_path = mapping_cfg.get("event_output_path", str(base_mapping_dir / "feature_mapping_events.csv"))
         summary_txt_path = mapping_cfg.get("summary_output_path", str(base_mapping_dir / "feature_mapping_summary.txt"))
         summary_csv_path = mapping_cfg.get("summary_csv_output_path", str(base_mapping_dir / "feature_mapping_feature_summary.csv"))
-        checkpoint_path = mapping_cfg.get("model_path") or default_checkpoint_path(self.config)
+        checkpoint_path = mapping_cfg.get("model_path") or resolve_best_checkpoint(self.config, target=self._cfg_value("extraction.target"))
         show_token_progress = bool(mapping_cfg.get("show_token_progress", True))
 
         input_dim = self.infer_input_dim()
@@ -382,19 +381,18 @@ if __name__ == "__main__":
         print(f"[mapping] Processing target layer: {target}")
         print(f"{'#'*60}")
         
-        config = ConfigManager.from_file(args.config)
-        config.set("extraction.target", target)
+        config = base_config.for_target(target)
         
-        from rfm.layout import default_activations_dir, default_checkpoint_path, default_feature_mapping_dir
+        from rfm.layout import default_feature_mapping_dir
         from pathlib import Path
         
-        act_dir = default_activations_dir(base_config, target=target)
+        act_dir = resolve_activations_dir(config, target=target)
         pt_files = sorted(Path(act_dir).glob("*.pt"))
         if pt_files:
             config.set("datasets.path", [str(p) for p in pt_files])
             
         if not config.get("feature-mapping.model_path"):
-            best_ckpt = resolve_best_checkpoint(base_config, target=target)
+            best_ckpt = resolve_best_checkpoint(config, target=target)
             config.set("feature-mapping.model_path", best_ckpt)
             
         base_mapping_dir = Path(default_feature_mapping_dir(base_config, target=target))

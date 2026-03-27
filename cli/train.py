@@ -7,8 +7,8 @@ import torch
 
 from rfm.config import ConfigManager
 from rfm.layout import (
-    default_activations_dir,
-    default_checkpoint_path,
+    resolve_activations_dir,
+    resolve_checkpoint_path,
     resolve_requested_targets,
 )
 from rfm.sae.train import train
@@ -112,20 +112,19 @@ def main():
         print(f"[train] Starting SAE training for target: {target}")
         print(f"{'#'*60}")
         
-        config = ConfigManager.from_file(args.config)
-        config.set("extraction.target", target)
+        config = base_config.for_target(target)
         
         # Resolve target-specific paths using base_config so multi-layer status is preserved
-        act_dir = default_activations_dir(base_config, target=target)
+        act_dir = resolve_activations_dir(config, target=target)
         pt_files = sorted(Path(act_dir).glob("*.pt"))
         if not pt_files:
             raise FileNotFoundError(f"No activation files found in {act_dir}")
         config.set("datasets.path", [str(p) for p in pt_files])
         
-        save_path = config.get("train.save_path")
+        save_path = config.get("train.save_path") or config.get("train.output_model_path")
         if not save_path:
-            save_path = default_checkpoint_path(base_config, target=target)
-            config.set("train.save_path", save_path)
+            save_path = resolve_checkpoint_path(config, target=target)
+        config.set("train.save_path", save_path)
         
         _run_sweep(config)
 

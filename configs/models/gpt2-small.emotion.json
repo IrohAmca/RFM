@@ -9,10 +9,12 @@
     "text_field": "text"
   },
   "extraction": {
-    "target": "blocks.0.hook_resid_post",
     "count": 800,
     "chunk_size": 10000000,
     "dtype": "bfloat16"
+  },
+  "layers": {
+    "blocks.0.hook_resid_post": {}
   },
   "sae": {
     "hidden_dim": 12288,

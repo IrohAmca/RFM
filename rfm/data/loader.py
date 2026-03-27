@@ -100,8 +100,8 @@ class BaseDataset:
         if isinstance(path_cfg, list) and path_cfg:
             return path_cfg
             
-        from rfm.layout import default_activations_dir
-        act_dir = default_activations_dir(self.config)
+        from rfm.layout import resolve_activations_dir
+        act_dir = resolve_activations_dir(self.config, target=self._cfg_section("extraction").get("target"))
         from pathlib import Path
         pt_files = sorted(Path(act_dir).glob("*.pt"))
         if not pt_files:

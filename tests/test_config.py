@@ -35,6 +35,16 @@ class TestConfigManagerDeepMerge:
         assert cfg.get("model_name") == "gpt2-small"
         assert cfg.get("extraction.target") == "blocks.0.hook_resid_post"
 
+    def test_layers_without_explicit_target_clear_default_target(self):
+        cfg = ConfigManager(
+            {
+                "layers": {
+                    "blocks.6.hook_resid_post": {},
+                }
+            }
+        )
+        assert cfg.get("extraction.target") is None
+
 
 class TestConfigManagerSet:
     def test_set_simple_key(self):
@@ -65,6 +75,28 @@ class TestConfigManagerSection:
         assert cfg.section("nonexistent") == {}
 
 
+class TestConfigManagerForTarget:
+    def test_for_target_applies_layer_specific_sections(self):
+        cfg = ConfigManager(
+            {
+                "layers": {
+                    "blocks.13.hook_resid_post": {
+                        "sae": {"hidden_dim": 24576, "topk_k": 192},
+                        "train": {"epochs": 40, "learning_rate": 3e-4},
+                    }
+                }
+            }
+        )
+
+        target_cfg = cfg.for_target("blocks.13.hook_resid_post")
+
+        assert target_cfg.get("extraction.target") == "blocks.13.hook_resid_post"
+        assert target_cfg.get("sae.hidden_dim") == 24576
+        assert target_cfg.get("sae.topk_k") == 192
+        assert target_cfg.get("train.epochs") == 40
+        assert target_cfg.get("train.learning_rate") == 3e-4
+
+
 class TestConfigManagerValidation:
     def test_valid_config(self):
         cfg = ConfigManager({"model_name": "gpt2-small"})
@@ -76,6 +108,17 @@ class TestConfigManagerValidation:
         cfg.set("extraction.target", None)
         errors = cfg.validate()
         assert any("extraction.target" in e for e in errors)
+
+    def test_layers_only_config_is_valid(self):
+        cfg = ConfigManager(
+            {
+                "layers": {
+                    "blocks.0.hook_resid_post": {},
+                    "blocks.6.hook_resid_post": {"train": {"epochs": 10}},
+                }
+            }
+        )
+        assert cfg.validate() == []
 
     def test_empty_target_list(self):
         cfg = ConfigManager({})

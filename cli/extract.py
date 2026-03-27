@@ -11,8 +11,8 @@ from rfm.config import ConfigManager
 from rfm.extractors import ExtractorFactory
 from rfm.data import BaseDataLoader
 from rfm.layout import (
-    default_activations_dir,
     is_multi_layer_config,
+    resolve_activations_dir,
     resolve_requested_targets,
     sanitize_layer_name,
     sanitize_model_name,
@@ -78,7 +78,7 @@ def extract_single_target(target, extractor, dataloader, config):
 
     output_dir = config.get("extraction.output_dir", ".")
     if output_dir in (None, "", "."):
-        output_dir = default_activations_dir(config, target=target)
+        output_dir = resolve_activations_dir(config, target=target)
     elif is_multi_layer_config(config):
         output_dir = str(Path(output_dir) / sanitize_layer_name(target))
 
@@ -127,16 +127,16 @@ def extract_single_target(target, extractor, dataloader, config):
 
 def main():
     args = parse_args()
-    config = ConfigManager.from_file(args.config)
+    base_config = ConfigManager.from_file(args.config)
 
-    extractor = ExtractorFactory.create(config)
-    dataloader = BaseDataLoader(config)
+    extractor = ExtractorFactory.create(base_config)
+    dataloader = BaseDataLoader(base_config)
     dataloader.load()
 
-    targets = _resolve_targets(config)
+    targets = _resolve_targets(base_config)
     for target in targets:
         dataloader.load()
-        extract_single_target(target, extractor, dataloader, config)
+        extract_single_target(target, extractor, dataloader, base_config.for_target(target))
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 from pathlib import Path
 import streamlit as st
 import pandas as pd
@@ -7,8 +8,13 @@ import plotly.express as px
 import plotly.graph_objects as go
 import torch
 
+if __package__ in {None, ""}:
+    project_root = Path(__file__).resolve().parents[2]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
 from rfm.config import ConfigManager
-from rfm.layout import model_slug, default_feature_mapping_dir, default_checkpoint_path
+from rfm.layout import model_slug, default_feature_mapping_dir, default_checkpoint_path, resolve_requested_targets
 
 st.set_page_config(page_title="RFM Dashboard", layout="wide", page_icon="🧠")
 
@@ -234,7 +240,8 @@ def main():
     checkpoint_path = default_checkpoint_path(config)
     
     st.sidebar.markdown(f"**Model:** `{config.get('model_name')}`")
-    st.sidebar.markdown(f"**Target:** `{config.get('extraction.target')}`")
+    targets = resolve_requested_targets(config)
+    st.sidebar.markdown(f"**Targets:** `{', '.join(targets)}`")
     
     st.sidebar.divider()
     

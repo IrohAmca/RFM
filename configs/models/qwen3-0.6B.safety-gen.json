@@ -12,9 +12,12 @@
   },
   "extraction": {
     "extractor_backend": "hf_generate",
-    "count": 4000,
+    "count": 3000,
+    "batch_size": 16,
+    "max_length": 512,
     "chunk_size": 500000,
     "dtype": "bfloat16",
+    "device": "cuda",
     "output_prefix": "gen_activations"
   },
   "generation": {

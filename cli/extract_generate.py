@@ -124,8 +124,15 @@ def _classify_sample(row, config, classifier: SafetyClassifier, response_text: s
     return "unknown", 0.0
 
 
-def extract_generation_target(target, extractor, dataloader, config, mode="replay", classifier=None):
-    """Extract activations from one target layer during generation."""
+def extract_all_targets(targets, extractor, dataloader, config, mode="replay", classifier=None):
+    """Extract activations for ALL target layers in a SINGLE forward pass per sample.
+
+    Instead of running the model N times (once per layer), this runs it ONCE
+    and slices out all requested layers.  This is critical for:
+      1. Speed:  N× faster (only 1 forward pass per sample).
+      2. Cross-layer analysis:  All layers' activations are perfectly aligned
+         to the same sample → enables feature combination detection.
+    """
     gen_cfg = config.get("generation", {})
     chunk_size = int(config.get("extraction.chunk_size", 500_000))
     count = int(config.get("extraction.count", 2000))
@@ -141,24 +148,32 @@ def extract_generation_target(target, extractor, dataloader, config, mode="repla
     temperature = float(gen_cfg.get("temperature", 0.8))
     top_p = float(gen_cfg.get("top_p", 0.95))
 
-    # Safety classifier (create default if not passed)
+    # Safety classifier
     if classifier is None:
         classifier = create_classifier_from_config(config)
 
-    output_dir = resolve_activations_dir(config, target=target)
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    # Per-layer output directories and buffers
+    output_dirs = {}
+    buffers = {}  # target → {acts, tks, lens, labels, scores, chunk_index}
+    for target in targets:
+        target_config = config.for_target(target) if hasattr(config, "for_target") else config
+        out_dir = resolve_activations_dir(target_config, target=target)
+        Path(out_dir).mkdir(parents=True, exist_ok=True)
+        output_dirs[target] = out_dir
+        buffers[target] = {
+            "acts": [], "tks": [], "lens": [], "labels": [], "scores": [],
+            "chunk_index": 0,
+        }
 
-    buffer_acts = []
-    buffer_tks = []
-    buffer_lens = []
-    buffer_labels = []
-    buffer_scores = []
-    chunk_index = 0
     skipped = 0
     label_counts = {"toxic": 0, "safe": 0, "unknown": 0}
+    model_name = extractor.model_name
+
+    print(f"[extract_gen] Multi-layer extraction: {len(targets)} layers in 1 forward pass")
+    print(f"[extract_gen] Targets: {targets}")
 
     for i, row in enumerate(
-        tqdm(islice(dataloader, count), total=count, desc=f"Extracting gen [{target}]")
+        tqdm(islice(dataloader, count), total=count, desc="Extracting gen [all layers]")
     ):
         prompt_text = row.get(prompt_field, "")
         if not prompt_text:
@@ -171,60 +186,72 @@ def extract_generation_target(target, extractor, dataloader, config, mode="repla
                 if not response_text:
                     skipped += 1
                     continue
-                result = extractor.extract_replay(prompt_text, response_text, target)
+                # Single forward pass → all layers
+                multi_result = extractor.extract_replay_multi(prompt_text, response_text, targets)
             else:
-                result = extractor.extract_generate(
-                    prompt_text, target,
+                # Single forward pass → all layers
+                multi_result = extractor.extract_generate_multi(
+                    prompt_text, targets,
                     max_new_tokens=max_new_tokens,
                     temperature=temperature,
                     top_p=top_p,
                 )
-                # For generate mode, decode the response for classification
+                # Decode response for classification (use any target's tokens — they're all the same)
+                first_target = targets[0]
                 response_text = extractor.tokenizer.decode(
-                    result["tokens"].tolist(), skip_special_tokens=True
+                    multi_result[first_target]["tokens"].tolist(), skip_special_tokens=True
                 )
         except Exception as e:
             print(f"[extract_gen] Warning: skipping sample {i}: {e}")
             skipped += 1
             continue
 
-        # Classify: dataset label first, then classifier on response text
+        # Classify (same label for all layers — it's the same sample)
         label, score = _classify_sample(row, config, classifier, response_text)
         label_counts[label] = label_counts.get(label, 0) + 1
 
-        acts = result["activations"].to(activation_dtype)
-        tks = result["tokens"]
+        # Distribute to per-layer buffers
+        for target in targets:
+            result = multi_result[target]
+            acts = result["activations"].to(activation_dtype)
+            tks = result["tokens"]
 
-        if acts.shape[0] == 0:
-            skipped += 1
-            continue
+            if acts.shape[0] == 0:
+                continue
 
-        buffer_acts.append(acts)
-        buffer_tks.append(tks)
-        buffer_lens.append(int(tks.shape[0]))
-        buffer_labels.append(label)
-        buffer_scores.append(score)
+            buf = buffers[target]
+            buf["acts"].append(acts)
+            buf["tks"].append(tks)
+            buf["lens"].append(int(tks.shape[0]))
+            buf["labels"].append(label)
+            buf["scores"].append(score)
 
-        current_size = sum(t.shape[0] for t in buffer_acts)
-        if current_size >= chunk_size:
-            chunk_index = flush_chunk(
-                buffer_acts, buffer_tks, buffer_lens, buffer_labels,
-                target, extractor.model_name, chunk_index,
-                output_dir, output_prefix,
-            )
+            # Check if this layer's buffer needs flushing
+            current_size = sum(t.shape[0] for t in buf["acts"])
+            if current_size >= chunk_size:
+                buf["chunk_index"] = flush_chunk(
+                    buf["acts"], buf["tks"], buf["lens"], buf["labels"],
+                    target, model_name, buf["chunk_index"],
+                    output_dirs[target], output_prefix,
+                )
 
-    # Flush remaining
-    flush_chunk(
-        buffer_acts, buffer_tks, buffer_lens, buffer_labels,
-        target, extractor.model_name, chunk_index,
-        output_dir, output_prefix,
-    )
+    # Flush remaining for each layer
+    for target in targets:
+        buf = buffers[target]
+        flush_chunk(
+            buf["acts"], buf["tks"], buf["lens"], buf["labels"],
+            target, model_name, buf["chunk_index"],
+            output_dirs[target], output_prefix,
+        )
 
     print(
-        f"[extract_gen] Complete for target: {target} → {output_dir}\n"
+        f"\n[extract_gen] Complete for all {len(targets)} layers\n"
         f"  Samples: toxic={label_counts.get('toxic', 0)} safe={label_counts.get('safe', 0)} "
-        f"unknown={label_counts.get('unknown', 0)} skipped={skipped}"
+        f"unknown={label_counts.get('unknown', 0)} skipped={skipped}\n"
+        f"  Output dirs:"
     )
+    for t, d in output_dirs.items():
+        print(f"    {t} → {d}")
 
 
 def main():
@@ -233,7 +260,7 @@ def main():
 
     extractor = HFGenerationExtractor(base_config)
 
-    # Create safety classifier once (shared across targets)
+    # Create safety classifier once
     classifier = create_classifier_from_config(base_config)
     print(f"[extract_gen] Safety classifier: backend={classifier.backend}, model={classifier.model_name}")
 
@@ -241,15 +268,16 @@ def main():
     dataloader.load()
 
     targets = resolve_requested_targets(base_config)
-    for target in targets:
-        dataloader.load()
-        extract_generation_target(
-            target, extractor, dataloader,
-            base_config.for_target(target),
-            mode=args.mode,
-            classifier=classifier,
-        )
+    print(f"[extract_gen] Requested targets: {targets}")
+
+    # All layers extracted in a single forward pass per sample
+    extract_all_targets(
+        targets, extractor, dataloader, base_config,
+        mode=args.mode,
+        classifier=classifier,
+    )
 
 
 if __name__ == "__main__":
     main()
+

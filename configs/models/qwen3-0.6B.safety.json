@@ -12,9 +12,12 @@
   },
   "extraction": {
     "extractor_backend": "hf",
-    "count": 8000,
+    "count": 3000,
+    "batch_size": 16,
+    "max_length": 512,
     "chunk_size": 1000000,
-    "dtype": "bfloat16"
+    "dtype": "bfloat16",
+    "device": "cuda"
   },
   "layers": {
     "blocks.6.hook_resid_post": {

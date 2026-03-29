@@ -109,6 +109,8 @@ class ContrastiveScorer:
         toxic_features: torch.Tensor,
         safe_features: torch.Tensor,
         min_activation_rate: float = 0.001,
+        mode: str = "continuous",
+        significance_test: bool = True,
     ) -> list[dict]:
         """Compute per-feature contrastive safety scores.
 
@@ -116,17 +118,31 @@ class ContrastiveScorer:
             toxic_features: [N_toxic, hidden_dim] sparse feature activations
             safe_features:  [N_safe, hidden_dim]
             min_activation_rate: ignore features below this rate in both classes
+            mode: "continuous" or "binary". If binary, activations > 0 become 1.
+            significance_test: execute Mann-Whitney U test for p-values.
 
         Returns:
             List of dicts (one per feature), sorted by risk_score descending.
         """
+        if mode == "binary":
+            toxic_features = (toxic_features > 0).float()
+            safe_features = (safe_features > 0).float()
+
         hidden_dim = toxic_features.shape[1]
         n_toxic = toxic_features.shape[0]
         n_safe = safe_features.shape[0]
 
-        logger.info(f"Computing contrastive scores: {n_toxic} toxic, {n_safe} safe tokens, {hidden_dim} features")
+        logger.info(f"Computing contrastive scores ({mode}): {n_toxic} toxic, {n_safe} safe tokens, {hidden_dim} features")
 
         results = []
+        
+        mannwhitneyu = None
+        if significance_test:
+            try:
+                from scipy.stats import mannwhitneyu
+            except ImportError:
+                logger.warning("scipy not installed. Skipping significance_test.")
+                significance_test = False
 
         for fid in range(hidden_dim):
             t_col = toxic_features[:, fid]
@@ -160,12 +176,25 @@ class ContrastiveScorer:
             s_var = s_col.var().item() if n_safe > 1 else 1e-8
             fisher = (t_mean - s_mean) ** 2 / max(t_var + s_var, 1e-12)
 
-            # 4. Risk score (combined): emphasizes both differential and separability
+            # 4. Cohen's d (standardized effect size)
+            pooled_std = np.sqrt(((n_toxic - 1) * t_var + (n_safe - 1) * s_var) / max(n_toxic + n_safe - 2, 1))
+            cohens_d = (t_mean - s_mean) / max(pooled_std, 1e-8)
+
+            # 5. Risk score (combined): emphasizes both differential and separability
             log_ratio = np.log(max(rate_ratio, 1e-8))
-            risk_score = log_ratio * np.sqrt(max(fisher, 0))
+            risk_score = log_ratio * abs(cohens_d)
 
             # Direction: positive = toxic-associated, negative = safe-associated
             direction = "toxic" if risk_score > 0 else "safe"
+            
+            # 6. Significance test (Mann-Whitney U)
+            p_value = 1.0
+            if significance_test and (t_rate > 0 or s_rate > 0):
+                if t_var > 0 or s_var > 0:
+                    try:
+                        _, p_value = mannwhitneyu(t_col.numpy(), s_col.numpy(), alternative='two-sided')
+                    except Exception:
+                        p_value = 1.0
 
             results.append({
                 "feature_id": fid,
@@ -176,7 +205,9 @@ class ContrastiveScorer:
                 "safe_strength": round(s_strength, 4),
                 "strength_diff": round(strength_diff, 4),
                 "fisher_score": round(fisher, 6),
+                "cohens_d": round(cohens_d, 4),
                 "risk_score": round(risk_score, 4),
+                "p_value": float(p_value),
                 "direction": direction,
             })
 
@@ -191,12 +222,14 @@ class ContrastiveScorer:
         chunk_dir: str | Path,
         pattern: str = "*.pt",
         min_activation_rate: float = 0.001,
+        mode: str = "continuous",
     ) -> list[dict]:
         """End-to-end: load chunks → encode → score.
 
         Args:
             chunk_dir: Directory containing activation .pt chunks (with labels).
             pattern:   Glob pattern for chunk files.
+            mode:      "continuous" or "binary"
 
         Returns:
             Sorted list of feature score dicts.
@@ -224,7 +257,7 @@ class ContrastiveScorer:
         toxic_features = self.encode(groups["toxic"])
         safe_features = self.encode(groups["safe"])
 
-        return self.compute_scores(toxic_features, safe_features, min_activation_rate)
+        return self.compute_scores(toxic_features, safe_features, min_activation_rate, mode=mode)
 
     @staticmethod
     def save_scores(scores: list[dict], output_path: str | Path):

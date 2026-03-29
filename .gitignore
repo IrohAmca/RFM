@@ -216,8 +216,5 @@ __marimo__/
 .streamlit/secrets.toml
 
 # SAE artifacts
-activations_*.pt
-gen_activations_*.pt
-checkpoints/
-!checkpoints/.gitkeep
 reports/
+runs/

@@ -24,6 +24,9 @@ from tqdm import tqdm
 from rfm.config import ConfigManager
 from rfm.extractors.hf_generate import HFGenerationExtractor
 from rfm.data import BaseDataLoader
+from rfm.data.prompt_augmenter import PromptAugmenter
+import time
+import json
 from rfm.layout import (
     resolve_activations_dir,
     resolve_requested_targets,
@@ -56,9 +59,10 @@ def parse_args():
 
 def flush_chunk(
     buffer_acts, buffer_tks, buffer_lens, buffer_labels,
+    buffer_categories, buffer_scores, buffer_prompt_lens,
     target, model_name, chunk_index, output_dir, output_prefix,
 ):
-    """Save a chunk of activations with per-sequence toxicity labels."""
+    """Save a chunk of activations with rich per-sequence metadata."""
     if not buffer_acts:
         return chunk_index
 
@@ -79,11 +83,31 @@ def flush_chunk(
                 "chunk_id": chunk_index,
                 "token_lengths": list(buffer_lens),
                 "labels": list(buffer_labels),  # per-sequence label
+                "categories": list(buffer_categories),
+                "scores": list(buffer_scores),
+                "prompt_lengths": list(buffer_prompt_lens),
                 "extraction_mode": "generation",
+                "extraction_timestamp": time.time(),
             },
         },
         save_path,
     )
+    
+    # Dump metadata to a lightweight JSON for fast dashboard parsing
+    meta_path = save_path.with_suffix(".meta.json")
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump({
+            "model_name": model_name,
+            "target_layer": target,
+            "chunk_id": chunk_index,
+            "token_lengths": list(buffer_lens),
+            "labels": list(buffer_labels),
+            "categories": list(buffer_categories),
+            "scores": list(buffer_scores),
+            "prompt_lengths": list(buffer_prompt_lens),
+            "extraction_mode": "generation",
+            "extraction_timestamp": time.time(),
+        }, f)
     n_toxic = sum(1 for la in buffer_labels if la == "toxic")
     n_safe = sum(1 for la in buffer_labels if la == "safe")
     print(
@@ -95,6 +119,9 @@ def flush_chunk(
     buffer_tks.clear()
     buffer_lens.clear()
     buffer_labels.clear()
+    buffer_categories.clear()
+    buffer_scores.clear()
+    buffer_prompt_lens.clear()
     return chunk_index + 1
 
 
@@ -140,6 +167,7 @@ def extract_all_targets(targets, extractor, dataloader, config, mode="replay", c
     # Fields
     prompt_field = config.get("dataloader.text_field", "prompt")
     response_field = gen_cfg.get("response_field", config.get("dataloader.response_field", "response"))
+    category_field = config.get("dataloader.category_field", "category")
 
     # Generation params
     max_new_tokens = int(gen_cfg.get("max_new_tokens", 256))
@@ -159,7 +187,8 @@ def extract_all_targets(targets, extractor, dataloader, config, mode="replay", c
         Path(out_dir).mkdir(parents=True, exist_ok=True)
         output_dirs[target] = out_dir
         buffers[target] = {
-            "acts": [], "tks": [], "lens": [], "labels": [], "scores": [],
+            "acts": [], "tks": [], "lens": [], "labels": [], 
+            "categories": [], "scores": [], "prompt_lens": [],
             "chunk_index": 0,
         }
 
@@ -181,7 +210,12 @@ def extract_all_targets(targets, extractor, dataloader, config, mode="replay", c
     pbar = tqdm(total=count, desc="Validated samples")
     raw_processed = 0
 
-    for row in dataloader:
+    # Setup prompt augmenter
+    templates = config.get("dataloader.prompt_templates", ["{prompt}"])
+    augmenter = PromptAugmenter(templates)
+    data_generator = augmenter.yield_augmented(dataloader, prompt_field)
+
+    for row in data_generator:
         if validated >= count or raw_processed >= max_raw:
             break
         raw_processed += 1
@@ -244,13 +278,19 @@ def extract_all_targets(targets, extractor, dataloader, config, mode="replay", c
             buf["tks"].append(tks)
             buf["lens"].append(int(tks.shape[0]))
             buf["labels"].append(label)
+            buf["categories"].append(str(row.get(category_field, "unknown")))
             buf["scores"].append(score)
+            
+            # Extract prompt length from multi_result if available
+            p_len = result.get("prompt_tokens", torch.tensor([])).shape[0] if "prompt_tokens" in result else 0
+            buf["prompt_lens"].append(int(p_len))
 
             # Check if this layer's buffer needs flushing
             current_size = sum(t.shape[0] for t in buf["acts"])
             if current_size >= chunk_size:
                 buf["chunk_index"] = flush_chunk(
                     buf["acts"], buf["tks"], buf["lens"], buf["labels"],
+                    buf["categories"], buf["scores"], buf["prompt_lens"],
                     target, model_name, buf["chunk_index"],
                     output_dirs[target], output_prefix,
                 )
@@ -262,6 +302,7 @@ def extract_all_targets(targets, extractor, dataloader, config, mode="replay", c
         buf = buffers[target]
         flush_chunk(
             buf["acts"], buf["tks"], buf["lens"], buf["labels"],
+            buf["categories"], buf["scores"], buf["prompt_lens"],
             target, model_name, buf["chunk_index"],
             output_dirs[target], output_prefix,
         )

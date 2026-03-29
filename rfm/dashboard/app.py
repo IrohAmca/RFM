@@ -14,7 +14,7 @@ if __package__ in {None, ""}:
         sys.path.insert(0, str(project_root))
 
 from rfm.config import ConfigManager
-from rfm.layout import model_slug, default_feature_mapping_dir, default_checkpoint_path, resolve_requested_targets
+from rfm.layout import model_slug, default_feature_mapping_dir, default_checkpoint_path, resolve_requested_targets, resolve_activations_dir
 
 st.set_page_config(page_title="RFM Dashboard", layout="wide", page_icon="🧠")
 
@@ -60,6 +60,54 @@ def load_training_history(checkpoint_path):
     except Exception as e:
         st.error(f"Error loading checkpoint history: {e}")
         return None
+
+@st.cache_data
+def load_contrastive_scores(mapping_dir, slug):
+    path = Path(mapping_dir) / f"{slug}_contrastive_scores.csv"
+    if path.exists():
+        return pd.read_csv(path)
+    return None
+
+import json
+@st.cache_data
+def load_extraction_metadata(_config):
+    targets = resolve_requested_targets(_config)
+    if not targets:
+        return None
+    
+    # We only need to look at the first target's directory because sequence metadata is identical across layers
+    target = targets[0]
+    act_dir = resolve_activations_dir(_config, target=target)
+    
+    meta_files = list(Path(act_dir).glob("*.meta.json"))
+    if not meta_files:
+        return None
+        
+    all_data = []
+    for mf in meta_files:
+        with open(mf, "r", encoding="utf-8") as f:
+            chunk_data = json.load(f)
+            
+            n_seq = len(chunk_data.get("labels", []))
+            labels = chunk_data.get("labels", [])
+            categories = chunk_data.get("categories", [])
+            lengths = chunk_data.get("token_lengths", [])
+            p_lengths = chunk_data.get("prompt_lengths", [])
+            scores = chunk_data.get("scores", [])
+            
+            for i in range(n_seq):
+                all_data.append({
+                    "chunk_id": chunk_data.get("chunk_id", 0),
+                    "label": labels[i] if i < len(labels) else "unknown",
+                    "category": categories[i] if i < len(categories) else "unknown",
+                    "token_length": lengths[i] if i < len(lengths) else 0,
+                    "prompt_length": p_lengths[i] if i < len(p_lengths) else 0,
+                    "score": scores[i] if i < len(scores) else 0.0,
+                })
+                
+    if not all_data:
+        return None
+    return pd.DataFrame(all_data)
 
 
 # ==========================================
@@ -222,6 +270,73 @@ def render_steering_playground(config, slug):
          # Implementation would involve loading model into memory here or via a persistent background process.
          
 
+def render_extraction_overview(config):
+    st.header("📊 Extraction Overview")
+    
+    meta_df = load_extraction_metadata(config)
+    if meta_df is None or meta_df.empty:
+        st.warning("No metadata files (`*.meta.json`) found in the activations directory. Run `cli.extract_generate` first to generate data.")
+        return
+        
+    st.success(f"Successfully loaded {len(meta_df)} sequences across {meta_df['chunk_id'].nunique()} chunks.")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        # Category balance
+        fig_cat = px.histogram(
+            meta_df, x="category", color="label", 
+            barmode="group", title="Category Distribution by Toxicity"
+        )
+        st.plotly_chart(fig_cat, use_container_width=True)
+        
+    with col2:
+        # Token length distribution
+        fig_len = px.box(
+            meta_df, x="label", y="token_length", color="label", 
+            points="all", title="Response Token Lengths"
+        )
+        st.plotly_chart(fig_len, use_container_width=True)
+        
+    # Classifier confidence
+    st.subheader("Classifier Confidence")
+    fig_conf = px.histogram(
+        meta_df, x="score", color="label", 
+        nbins=50, title="Safety Classifier Score Distribution"
+    )
+    st.plotly_chart(fig_conf, use_container_width=True)
+
+def render_contrastive_analysis(config, slug, mapping_dir):
+    st.header("🔬 Contrastive Analysis")
+    scores_df = load_contrastive_scores(mapping_dir, slug)
+    if scores_df is None:
+        st.warning(f"No contrastive scores found for `{slug}`. Run safety scoring pipeline first.")
+        return
+        
+    col1, col2 = st.columns(2)
+    with col1:
+        # Fisher vs Rate Ratio Scatter
+        fig_scatter = px.scatter(
+            scores_df, x="fisher_score", y="rate_ratio",
+            color="direction", hover_data=["feature_id", "risk_score"],
+            log_x=True, log_y=True, title="Feature Risk Landscape"
+        )
+        st.plotly_chart(fig_scatter, use_container_width=True)
+    with col2:
+        # Risk Score Distribution
+        fig_dist = px.violin(
+            scores_df, x="direction", y="risk_score",
+            box=True, points="all", title="Risk Score Distribution"
+        )
+        st.plotly_chart(fig_dist, use_container_width=True)
+        
+    st.subheader("Top Risk Features")
+    st.dataframe(scores_df.sort_values(by="risk_score", key=abs, ascending=False).head(100), use_container_width=True)
+
+def render_cross_layer_view():
+    st.header("🧬 Cross-Layer View")
+    st.info("Cross-layer feature combinations and Decision Tree rules (NetworkX/Plotly) will be displayed here.")
+    st.markdown("Run `cli.safety_score --mode cross-layer` to generate the JSON reports for this view.")
+
 # ==========================================
 # Main App Structure
 # ==========================================
@@ -245,7 +360,11 @@ def main():
     
     st.sidebar.divider()
     
-    page = st.sidebar.radio("Navigation", ["Feature Explorer", "Training Metrics", "Steering Playground"])
+    pages = [
+        "Feature Explorer", "Training Metrics", "Steering Playground", 
+        "Extraction Overview", "Contrastive Analysis", "Cross-Layer View"
+    ]
+    page = st.sidebar.radio("Navigation", pages)
     
     if page == "Feature Explorer":
         render_feature_explorer(config, slug, mapping_dir)
@@ -253,6 +372,12 @@ def main():
         render_training_metrics(config, checkpoint_path)
     elif page == "Steering Playground":
         render_steering_playground(config, slug)
+    elif page == "Extraction Overview":
+        render_extraction_overview(config)
+    elif page == "Contrastive Analysis":
+        render_contrastive_analysis(config, slug, mapping_dir)
+    elif page == "Cross-Layer View":
+        render_cross_layer_view()
 
 if __name__ == "__main__":
     main()

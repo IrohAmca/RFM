@@ -106,7 +106,7 @@ def main():
             else:
                 print(f"\n[pipeline] Skipping: {label}")
 
-        print(f"\n[pipeline] Done.")
+        print("\n[pipeline] Done.")
     finally:
         if temp_config_path is not None:
             temp_config_path.unlink(missing_ok=True)

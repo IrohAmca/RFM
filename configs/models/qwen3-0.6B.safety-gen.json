@@ -8,11 +8,18 @@
     "streaming": true,
     "text_field": "prompt",
     "filter_field": null,
-    "filter_values": null
+    "filter_values": null,
+    "category_field": "category",
+    "category_balanced": true,
+    "min_per_category": 200,
+    "prompt_templates": [
+      "{prompt}",
+      "Please answer: {prompt}"
+    ]
   },
   "extraction": {
     "extractor_backend": "hf_generate",
-    "count": 3000,
+    "count": 6000,
     "batch_size": 16,
     "max_length": 512,
     "chunk_size": 500000,

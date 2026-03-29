@@ -16,7 +16,6 @@ that provide prompt+response+label triples such as PKU-Alignment/BeaverTails.
 """
 
 import argparse
-from itertools import islice
 from pathlib import Path
 
 import torch
@@ -28,7 +27,6 @@ from rfm.data import BaseDataLoader
 from rfm.layout import (
     resolve_activations_dir,
     resolve_requested_targets,
-    sanitize_layer_name,
     sanitize_model_name,
 )
 from rfm.safety.classifier import SafetyClassifier, create_classifier_from_config
@@ -86,8 +84,8 @@ def flush_chunk(
         },
         save_path,
     )
-    n_toxic = sum(1 for l in buffer_labels if l == "toxic")
-    n_safe = sum(1 for l in buffer_labels if l == "safe")
+    n_toxic = sum(1 for la in buffer_labels if la == "toxic")
+    n_safe = sum(1 for la in buffer_labels if la == "safe")
     print(
         f"[extract_gen] Saved chunk {chunk_index} → {save_path} "
         f"({combined_acts.shape[0]} tokens, {n_toxic} toxic / {n_safe} safe sequences)"
@@ -166,15 +164,28 @@ def extract_all_targets(targets, extractor, dataloader, config, mode="replay", c
         }
 
     skipped = 0
+    rejected = 0
+    validated = 0  # count of accepted (toxic + safe) samples
     label_counts = {"toxic": 0, "safe": 0, "unknown": 0}
+    valid_labels = {"toxic", "safe"}
     model_name = extractor.model_name
 
+    # count = TARGET number of validated samples (not raw)
+    # max_raw = safety limit to prevent infinite iteration
+    max_raw = int(config.get("extraction.max_raw_samples", count * 5))
+
     print(f"[extract_gen] Multi-layer extraction: {len(targets)} layers in 1 forward pass")
+    print(f"[extract_gen] Target: {count} validated samples (max {max_raw} raw)")
     print(f"[extract_gen] Targets: {targets}")
 
-    for i, row in enumerate(
-        tqdm(islice(dataloader, count), total=count, desc="Extracting gen [all layers]")
-    ):
+    pbar = tqdm(total=count, desc="Validated samples")
+    raw_processed = 0
+
+    for row in dataloader:
+        if validated >= count or raw_processed >= max_raw:
+            break
+        raw_processed += 1
+
         prompt_text = row.get(prompt_field, "")
         if not prompt_text:
             skipped += 1
@@ -202,7 +213,7 @@ def extract_all_targets(targets, extractor, dataloader, config, mode="replay", c
                     multi_result[first_target]["tokens"].tolist(), skip_special_tokens=True
                 )
         except Exception as e:
-            print(f"[extract_gen] Warning: skipping sample {i}: {e}")
+            print(f"[extract_gen] Warning: skipping sample {raw_processed}: {e}")
             skipped += 1
             continue
 
@@ -210,7 +221,16 @@ def extract_all_targets(targets, extractor, dataloader, config, mode="replay", c
         label, score = _classify_sample(row, config, classifier, response_text)
         label_counts[label] = label_counts.get(label, 0) + 1
 
-        # Distribute to per-layer buffers
+        # ── ATOMIC GUARD: reject unknown from ALL layers ──────────────────
+        if label not in valid_labels:
+            rejected += 1
+            continue  # skips the entire per-target loop below
+
+        # ACCEPTED — increment validated count
+        validated += 1
+        pbar.update(1)
+
+        # Distribute to per-layer buffers (all layers or none)
         for target in targets:
             result = multi_result[target]
             acts = result["activations"].to(activation_dtype)
@@ -235,6 +255,8 @@ def extract_all_targets(targets, extractor, dataloader, config, mode="replay", c
                     output_dirs[target], output_prefix,
                 )
 
+    pbar.close()
+
     # Flush remaining for each layer
     for target in targets:
         buf = buffers[target]
@@ -244,10 +266,13 @@ def extract_all_targets(targets, extractor, dataloader, config, mode="replay", c
             output_dirs[target], output_prefix,
         )
 
+    yield_rate = validated / max(raw_processed, 1) * 100
     print(
         f"\n[extract_gen] Complete for all {len(targets)} layers\n"
-        f"  Samples: toxic={label_counts.get('toxic', 0)} safe={label_counts.get('safe', 0)} "
-        f"unknown={label_counts.get('unknown', 0)} skipped={skipped}\n"
+        f"  Validated: {validated}/{count} target "
+        f"(toxic={label_counts.get('toxic', 0)} safe={label_counts.get('safe', 0)})\n"
+        f"  Rejected (unknown): {rejected} | Skipped (error/empty): {skipped}\n"
+        f"  Raw processed: {raw_processed} → Yield rate: {yield_rate:.1f}%\n"
         f"  Output dirs:"
     )
     for t, d in output_dirs.items():

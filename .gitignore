@@ -217,6 +217,7 @@ __marimo__/
 
 # SAE artifacts
 activations_*.pt
+gen_activations_*.pt
 checkpoints/
 !checkpoints/.gitkeep
 reports/

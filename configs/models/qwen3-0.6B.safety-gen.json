@@ -3,7 +3,7 @@
   "dataloader": {
     "dataset_name": "PKU-Alignment/BeaverTails",
     "dataset_config_name": null,
-    "split": "train",
+    "split": "330k_train",
     "data_dir": null,
     "streaming": true,
     "text_field": "prompt",

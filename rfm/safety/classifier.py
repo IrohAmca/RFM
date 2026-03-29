@@ -14,7 +14,6 @@ activations.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 logger = logging.getLogger("rfm.safety.classifier")
 

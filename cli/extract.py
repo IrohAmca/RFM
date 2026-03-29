@@ -42,7 +42,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def flush_chunk(buffer_acts, buffer_tks, buffer_lens, target, model_name, chunk_index, output_dir, output_prefix):
+def flush_chunk(buffer_acts, buffer_tks, buffer_lens, target, model_name, chunk_index, output_dir, output_prefix, labels=None):
     if not buffer_acts:
         return chunk_index
 
@@ -61,11 +61,18 @@ def flush_chunk(buffer_acts, buffer_tks, buffer_lens, target, model_name, chunk_
                 "target_layer": target,
                 "chunk_id": chunk_index,
                 "token_lengths": list(buffer_lens),
+                "labels": list(labels) if labels is not None else None,
             },
         },
         save_path,
     )
-    print(f"[extract] Saved chunk {chunk_index} → {save_path} ({combined_acts.shape[0]} tokens)")
+    n_total = combined_acts.shape[0]
+    label_info = ""
+    if labels:
+        n_toxic = sum(1 for la in labels if la == "toxic")
+        n_safe = sum(1 for la in labels if la == "safe")
+        label_info = f", {n_toxic} toxic / {n_safe} safe"
+    print(f"[extract] Saved chunk {chunk_index} → {save_path} ({n_total} tokens{label_info})")
 
     buffer_acts.clear()
     buffer_tks.clear()
@@ -74,7 +81,18 @@ def flush_chunk(buffer_acts, buffer_tks, buffer_lens, target, model_name, chunk_
 
 
 def extract_all_targets_batched(targets, extractor, dataloader, config):
-    """Batched multi-layer extraction: ALL layers in ONE forward pass per batch."""
+    """Batched multi-layer extraction with atomic per-sample validation.
+
+    Correctness guarantee:
+        A sample is added to buffer_layer_A and buffer_layer_B
+        **at exactly the same time** or **not at all**.
+
+        If the safety classifier rejects sample i (label='unknown' or
+        classification fails), sample i is dropped from EVERY layer's
+        buffer — so all layers always have the same number of samples.
+    """
+    from rfm.safety.classifier import create_classifier_from_config
+
     chunk_size = int(config.get("extraction.chunk_size", 1_000_000))
     count = int(config.get("extraction.count", 100))
     output_prefix = config.get("extraction.output_prefix", "activations")
@@ -82,6 +100,11 @@ def extract_all_targets_batched(targets, extractor, dataloader, config):
     text_field = config.get("dataloader.text_field", "content")
     batch_size = int(config.get("extraction.batch_size", 16))
     max_length = int(config.get("extraction.max_length", 512))
+
+    # Safety classifier — validates each sample before saving
+    classifier = create_classifier_from_config(config)
+    valid_labels = {"toxic", "safe"}
+    print(f"[extract] Classifier: backend={classifier.backend}, model={classifier.model_name}")
 
     # Per-layer output dirs and buffers
     output_dirs = {}
@@ -91,51 +114,78 @@ def extract_all_targets_batched(targets, extractor, dataloader, config):
         out_dir = resolve_activations_dir(target_config, target=target)
         Path(out_dir).mkdir(parents=True, exist_ok=True)
         output_dirs[target] = out_dir
-        buffers[target] = {"acts": [], "tks": [], "lens": [], "chunk_index": 0}
+        buffers[target] = {"acts": [], "tks": [], "lens": [], "labels": [], "chunk_index": 0}
 
     model_name = extractor.model_name
-
-    # Pre-collect all rows (needed to display progress correctly)
     all_rows = list(islice(dataloader, count))
     total_batches = (len(all_rows) + batch_size - 1) // batch_size
+    label_counts = {"toxic": 0, "safe": 0, "unknown": 0, "skipped": 0}
 
-    print(f"\n[extract] Batched multi-layer extraction")
-    print(f"  Samples: {len(all_rows)}  Batch size: {batch_size}  Layers: {len(targets)}")
-    print(f"  Forward passes: {total_batches} (was {len(all_rows) * len(targets)} without batching)\n")
+    print("\n[extract] Batched multi-layer extraction (with validation)")
+    print(f"  Samples: {len(all_rows)}  Batch: {batch_size}  Layers: {len(targets)}")
+    print(f"  Forward passes: {total_batches} (était {len(all_rows) * len(targets)} sans batching)\n")
 
     for batch_start in tqdm(range(0, len(all_rows), batch_size), total=total_batches, desc="Extracting [batched]"):
         batch_rows = all_rows[batch_start: batch_start + batch_size]
         texts = [row.get(text_field, "") for row in batch_rows]
-        texts = [t for t in texts if t]
-        if not texts:
+
+        # Keep track of original indices (so we can discard atomically)
+        valid_pairs = [(i, t) for i, t in enumerate(texts) if t]
+        if not valid_pairs:
             continue
+        valid_indices, valid_texts = zip(*valid_pairs)
 
         try:
-            # ONE forward pass → all layers, all texts
-            batch_results = extractor.extract_batch_multi(texts, targets, max_length=max_length)
+            batch_results = extractor.extract_batch_multi(list(valid_texts), targets, max_length=max_length)
         except Exception as e:
             print(f"[extract] Warning: batch {batch_start // batch_size} failed ({e}), skipping.")
+            label_counts["skipped"] += len(valid_texts)
             continue
 
-        for target in targets:
-            layer_acts_list = batch_results[target]  # list of [seq_len, d_model]
-            buf = buffers[target]
+        # ── Classify all texts in the batch ──────────────────────────────
+        # Run classifier on all texts at once (HF backend benefits from batch)
+        try:
+            classify_results = classifier.classify_batch(list(valid_texts))
+        except Exception:
+            classify_results = []
+            for t in valid_texts:
+                try:
+                    classify_results.append(classifier.classify(t))
+                except Exception:
+                    classify_results.append({"label": "unknown", "score": 0.0})
 
-            for sample_acts in layer_acts_list:
-                acts_2d = sample_acts.to(activation_dtype)
-                # Token IDs: use zeros as placeholder (activations are what SAE needs)
+        # ── Atomic add: only valid samples, ALL layers together ───────────
+        for local_idx, (cls_result, sample_text) in enumerate(zip(classify_results, valid_texts)):
+            label = cls_result["label"]
+            label_counts[label] = label_counts.get(label, 0) + 1
+
+            if label not in valid_labels:
+                # REJECT: skip this sample from EVERY layer — alignment preserved
+                label_counts["skipped"] = label_counts.get("skipped", 0) + 1
+                continue
+
+            # ACCEPT: add to ALL layer buffers atomically
+            for target in targets:
+                layer_acts_list = batch_results[target]
+                acts_2d = layer_acts_list[local_idx].to(activation_dtype)
                 sample_tks = torch.zeros(acts_2d.shape[0], dtype=torch.long)
+                buf = buffers[target]
                 buf["acts"].append(acts_2d)
                 buf["tks"].append(sample_tks)
                 buf["lens"].append(int(acts_2d.shape[0]))
+                buf["labels"].append(label)
 
-            # Flush if buffer is large enough
+        # Flush per-layer if needed
+        for target in targets:
+            buf = buffers[target]
             if sum(t.shape[0] for t in buf["acts"]) >= chunk_size:
                 buf["chunk_index"] = flush_chunk(
                     buf["acts"], buf["tks"], buf["lens"],
                     target, model_name, buf["chunk_index"],
                     output_dirs[target], output_prefix,
+                    labels=buf["labels"],
                 )
+                buf["labels"].clear()
 
     # Final flush for each layer
     for target in targets:
@@ -144,8 +194,17 @@ def extract_all_targets_batched(targets, extractor, dataloader, config):
             buf["acts"], buf["tks"], buf["lens"],
             target, model_name, buf["chunk_index"],
             output_dirs[target], output_prefix,
+            labels=buf["labels"],
         )
         print(f"[extract] Complete: {target} → {output_dirs[target]}")
+
+    print(
+        f"\n[extract] Validation summary: "
+        f"toxic={label_counts.get('toxic', 0)} "
+        f"safe={label_counts.get('safe', 0)} "
+        f"unknown/rejected={label_counts.get('unknown', 0)} "
+        f"skipped={label_counts.get('skipped', 0)}"
+    )
 
 
 def _extract_single_target_legacy(target, extractor, dataloader, config):

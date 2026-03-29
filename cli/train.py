@@ -74,7 +74,7 @@ def _run_sweep(config):
                 _save_model(model, config, sweep_save)
                 print(f"[sweep] Saved → {sweep_save}")
         else:
-            print(f"[train] Architecture: Gated")
+            print("[train] Architecture: Gated")
             model = train(config)
             _save_model(model, config, save_path)
             print(f"[train] Saved → {save_path}")

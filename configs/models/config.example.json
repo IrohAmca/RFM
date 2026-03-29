@@ -8,17 +8,38 @@
     "text_field": "content"
   },
   "extraction": {
-    "target": "blocks.0.hook_resid_post",
     "count": 100,
     "chunk_size": 1000000,
     "dtype": "bfloat16",
     "output_dir": ".",
     "output_prefix": "activations"
   },
-  "datasets": {
-    "path": [
-      "activations_gpt2-small_blocks_0_hook_resid_post_0.pt"
-    ]
+  "layers": {
+    "blocks.0.hook_resid_post": {
+      "sae": {
+        "hidden_dim": 3072,
+        "sparsity_weight": 0.001
+      },
+      "train": {
+        "batch_size": 1024,
+        "epochs": 1,
+        "learning_rate": 0.001,
+        "weight_decay": 0.0,
+        "device": "cpu",
+        "save_path": "checkpoints/blocks_0_hook_resid_post/sae.pt"
+      }
+    },
+    "blocks.6.hook_resid_post": {
+      "sae": {
+        "hidden_dim": 6144,
+        "sparsity_weight": 0.001
+      },
+      "train": {
+        "epochs": 3,
+        "learning_rate": 0.0005,
+        "save_path": "checkpoints/blocks_6_hook_resid_post/sae.pt"
+      }
+    }
   },
   "sae": {
     "hidden_dim": 3072,
@@ -30,6 +51,6 @@
     "learning_rate": 0.001,
     "weight_decay": 0.0,
     "device": "cpu",
-    "output_model_path": "checkpoints/sae.pt"
+    "save_path": "checkpoints/sae.pt"
   }
 }

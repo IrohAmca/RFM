@@ -1,7 +1,11 @@
+import shutil
+from pathlib import Path
+from uuid import uuid4
+
 import pytest
 import torch
 
-from rfm.sae.model import SparseAutoEncoder, TopKSAE, GatedSAE, SAEFactory
+from rfm.sae.model import SparseAutoEncoder, TopKSAE, GatedSAE, SAEFactory, load_sae_checkpoint
 
 
 class TestSparseAutoEncoderForward:
@@ -143,3 +147,50 @@ class TestSAEFactory:
         model = SAEFactory.create("unknown_arch", 64, 256)
         assert isinstance(model, SparseAutoEncoder)
         assert not isinstance(model, TopKSAE)
+
+
+class TestCheckpointLoading:
+    def _make_temp_dir(self):
+        root = Path(".tmp_test_artifacts")
+        root.mkdir(exist_ok=True)
+        path = root / uuid4().hex
+        path.mkdir(exist_ok=True)
+        try:
+            yield path
+        finally:
+            shutil.rmtree(path, ignore_errors=True)
+
+    def test_load_sae_checkpoint_preserves_topk_architecture(self):
+        model = TopKSAE(8, 16, k=3, aux_alpha=0.25)
+        for temp_dir in self._make_temp_dir():
+            checkpoint_path = temp_dir / "topk.pt"
+            torch.save(
+                {
+                    "state_dict": model.state_dict(),
+                    "config": {
+                        "sae": {
+                            "architecture": "topk",
+                            "hidden_dim": 16,
+                            "topk_k": 3,
+                            "aux_alpha": 0.25,
+                        }
+                    }
+                },
+                checkpoint_path,
+            )
+
+            loaded_model, checkpoint = load_sae_checkpoint(checkpoint_path)
+
+            assert isinstance(loaded_model, TopKSAE)
+            assert loaded_model.k == 3
+            assert loaded_model.aux_alpha == pytest.approx(0.25)
+            assert checkpoint["config"]["sae"]["architecture"] == "topk"
+
+    def test_load_sae_checkpoint_raises_on_input_dim_mismatch(self):
+        model = SparseAutoEncoder(8, 16)
+        for temp_dir in self._make_temp_dir():
+            checkpoint_path = temp_dir / "vanilla.pt"
+            torch.save({"state_dict": model.state_dict(), "config": {"sae": {"architecture": "vanilla"}}}, checkpoint_path)
+
+            with pytest.raises(ValueError, match="input_dim=8"):
+                load_sae_checkpoint(checkpoint_path, expected_input_dim=12)

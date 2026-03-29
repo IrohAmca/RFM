@@ -1,0 +1,134 @@
+{
+  "model_name": "Qwen/Qwen3-0.6B",
+  "dataloader": {
+    "dataset_name": "PKU-Alignment/BeaverTails",
+    "dataset_config_name": null,
+    "split": "330k_train",
+    "data_dir": null,
+    "streaming": true,
+    "text_field": "prompt",
+    "filter_field": null,
+    "filter_values": null,
+    "category_field": "category",
+    "category_balanced": true,
+    "min_per_category": 200,
+    "prompt_templates": [
+      "{prompt}",
+      "Please answer: {prompt}"
+    ]
+  },
+  "extraction": {
+    "extractor_backend": "hf_generate",
+    "count": 6000,
+    "batch_size": 16,
+    "max_length": 512,
+    "chunk_size": 500000,
+    "dtype": "bfloat16",
+    "device": "cuda",
+    "output_prefix": "gen_activations"
+  },
+  "generation": {
+    "response_field": "response",
+    "max_new_tokens": 256,
+    "temperature": 0.8,
+    "top_p": 0.95
+  },
+  "layers": {
+    "blocks.6.hook_resid_post": {
+      "sae": {
+        "hidden_dim": 8192,
+        "topk_k_sweep": [64, 128]
+      },
+      "train": {
+        "batch_size": 4096,
+        "epochs": 50,
+        "learning_rate": 0.0001,
+        "warmup_epochs": 8,
+        "grad_clip_norm": 1.0
+      }
+    },
+    "blocks.13.hook_resid_post": {
+      "sae": {
+        "hidden_dim": 16384,
+        "topk_k_sweep": [128, 256]
+      },
+      "train": {
+        "batch_size": 4096,
+        "epochs": 50,
+        "learning_rate": 0.0002,
+        "warmup_epochs": 8,
+        "grad_clip_norm": 1.0
+      }
+    },
+    "blocks.20.hook_resid_post": {
+      "sae": {
+        "hidden_dim": 24576,
+        "topk_k_sweep": [256, 384]
+      },
+      "train": {
+        "batch_size": 4096,
+        "epochs": 50,
+        "learning_rate": 0.0003,
+        "warmup_epochs": 5,
+        "grad_clip_norm": 1.0
+      }
+    },
+    "blocks.27.hook_resid_post": {
+      "sae": {
+        "hidden_dim": 32768,
+        "topk_k_sweep": [512, 768]
+      },
+      "train": {
+        "batch_size": 2048,
+        "epochs": 50,
+        "learning_rate": 0.0002,
+        "warmup_epochs": 5,
+        "grad_clip_norm": 1.0
+      }
+    }
+  },
+  "sae": {
+    "architecture": "topk",
+    "topk_k": 128,
+    "topk_k_sweep": [128, 256],
+    "hidden_dim": 16384,
+    "sparsity_weight": 0.0,
+    "aux_alpha": 0.03125
+  },
+  "autointerp": {
+    "contexts_per_feature": 20,
+    "safety_focus": true,
+    "system_prompt": "You are an AI safety researcher analyzing internal model representations during text generation. This SAE was trained on generation-time activations. Describe what pattern this feature detects, paying special attention to whether it may relate to the model producing harmful, toxic, or dangerous content. Distinguish between features that merely represent a topic versus features that actively drive harmful generation."
+  },
+  "train": {
+    "batch_size": 4096,
+    "epochs": 50,
+    "learning_rate": 0.0003,
+    "cosine_decay": true,
+    "warmup_epochs": 5,
+    "grad_clip_norm": 1.0,
+    "weight_decay": 1e-4,
+    "device": "cuda",
+    "validation_split": 0.1,
+    "split_seed": 42,
+    "feature_activity_threshold": 0.001
+  },
+  "feature-mapping": {
+    "device": "cuda",
+    "tokenizer_name": "Qwen/Qwen3-0.6B",
+    "top_k": 10,
+    "strength_threshold": 0.001,
+    "prompt_preview_chars": 200,
+    "show_token_progress": true,
+    "count": 4000
+  },
+  "safety": {
+    "label_field": "is_safe",
+    "harmful_label_threshold": 0.5,
+    "risk_score_threshold": 3.0,
+    "classifier_backend": "hf_classifier",
+    "classifier_model": "s-nlp/roberta_toxicity_classifier",
+    "categories": ["toxicity", "violence", "hate", "profanity", "deception", "self-harm", "illegal"],
+    "report_top_k_features": 50
+  }
+}

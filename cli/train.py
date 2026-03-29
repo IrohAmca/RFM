@@ -6,7 +6,11 @@ from pathlib import Path
 import torch
 
 from rfm.config import ConfigManager
-from rfm.layout import default_activations_dir, default_checkpoint_path
+from rfm.layout import (
+    resolve_activations_dir,
+    resolve_checkpoint_path,
+    resolve_requested_targets,
+)
 from rfm.sae.train import train
 
 
@@ -70,7 +74,7 @@ def _run_sweep(config):
                 _save_model(model, config, sweep_save)
                 print(f"[sweep] Saved → {sweep_save}")
         else:
-            print(f"[train] Architecture: Gated")
+            print("[train] Architecture: Gated")
             model = train(config)
             _save_model(model, config, save_path)
             print(f"[train] Saved → {save_path}")
@@ -95,10 +99,7 @@ def _run_sweep(config):
 
 
 def _resolve_targets(config):
-    raw = config.get("extraction.target")
-    if isinstance(raw, list):
-        return raw
-    return [raw]
+    return resolve_requested_targets(config)
 
 
 def main():
@@ -111,11 +112,10 @@ def main():
         print(f"[train] Starting SAE training for target: {target}")
         print(f"{'#'*60}")
         
-        config = ConfigManager.from_file(args.config)
-        config.set("extraction.target", target)
+        config = base_config.for_target(target)
         
         # Resolve target-specific paths using base_config so multi-layer status is preserved
-        act_dir = default_activations_dir(base_config, target=target)
+        act_dir = resolve_activations_dir(config, target=target)
         pt_files = sorted(Path(act_dir).glob("*.pt"))
         if not pt_files:
             raise FileNotFoundError(f"No activation files found in {act_dir}")
@@ -123,8 +123,8 @@ def main():
         
         save_path = config.get("train.save_path")
         if not save_path:
-            save_path = default_checkpoint_path(base_config, target=target)
-            config.set("train.save_path", save_path)
+            save_path = resolve_checkpoint_path(config, target=target)
+        config.set("train.save_path", save_path)
         
         _run_sweep(config)
 

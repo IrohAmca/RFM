@@ -1,4 +1,26 @@
+import re
 from pathlib import Path
+
+
+DEFAULT_TARGET = "blocks.0.hook_resid_post"
+
+
+def _config_get(config, key, default=None):
+    if hasattr(config, "get"):
+        return config.get(key, default)
+
+    if not isinstance(config, dict):
+        return default
+
+    if "." not in key:
+        return config.get(key, default)
+
+    current = config
+    for part in key.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return default
+        current = current[part]
+    return current
 
 
 def sanitize_model_name(model_name: str) -> str:
@@ -24,22 +46,78 @@ def model_slug(config) -> str:
     return sanitize_model_name(model_name)
 
 
-def _resolve_targets(config):
-    """Return a list of target layer names from config."""
-    raw = None
-    if hasattr(config, "get"):
-        raw = config.get("extraction.target")
-    elif isinstance(config, dict):
-        raw = config.get("extraction", {}).get("target")
-    if isinstance(raw, list):
+def resolve_all_targets(config):
+    """Return the full configured list of target layers."""
+    raw = _config_get(config, "extraction.target")
+    if isinstance(raw, list) and raw:
         return raw
-    if raw:
+    if isinstance(raw, str) and raw.strip():
         return [raw]
-    return ["blocks.0.hook_resid_post"]
+    layer_cfgs = _config_get(config, "layers", {})
+    if isinstance(layer_cfgs, dict) and layer_cfgs:
+        return list(layer_cfgs.keys())
+    return [DEFAULT_TARGET]
+
+
+def _resolve_targets(config):
+    return resolve_all_targets(config)
+
+
+def _hook_index(value):
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+
+    match = re.fullmatch(r"(?:blocks|layer)\.(\d+)(?:\.hook_resid_post)?", text)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def select_targets_from(targets, from_hook):
+    if from_hook in (None, ""):
+        return list(targets)
+
+    requested = str(from_hook).strip()
+    if not requested:
+        return list(targets)
+
+    targets = list(targets)
+    if requested in targets:
+        start_idx = targets.index(requested)
+        return targets[start_idx:]
+
+    requested_idx = _hook_index(requested)
+    if requested_idx is not None:
+        for idx, target in enumerate(targets):
+            if _hook_index(target) == requested_idx:
+                return targets[idx:]
+
+    available = ", ".join(targets)
+    raise ValueError(
+        f"Hook '{from_hook}' not found in extraction.target. Available targets: {available}"
+    )
+
+
+def resolve_requested_targets(config):
+    """Return the configured targets after applying any pipeline hook offset."""
+    return select_targets_from(
+        resolve_all_targets(config),
+        _config_get(config, "pipeline.from_hook"),
+    )
 
 
 def _is_multi_layer(config) -> bool:
-    return len(_resolve_targets(config)) > 1
+    layer_cfgs = _config_get(config, "layers", {})
+    if isinstance(layer_cfgs, dict) and len(layer_cfgs) > 1:
+        return True
+    return len(resolve_all_targets(config)) > 1
+
+
+def is_multi_layer_config(config) -> bool:
+    return _is_multi_layer(config)
 
 
 def default_activations_dir(config, target=None) -> str:
@@ -49,11 +127,34 @@ def default_activations_dir(config, target=None) -> str:
     return str(base)
 
 
+def resolve_activations_dir(config, target=None) -> str:
+    output_dir = _config_get(config, "extraction.output_dir")
+    if output_dir in (None, "", "."):
+        return default_activations_dir(config, target=target)
+
+    path = Path(output_dir)
+    if target and _is_multi_layer(config):
+        path = path / sanitize_layer_name(target)
+    return str(path)
+
+
 def default_checkpoint_path(config, target=None) -> str:
     base = Path("runs") / model_slug(config) / "checkpoints"
     if target and _is_multi_layer(config):
         return str(base / sanitize_layer_name(target) / "sae.pt")
     return str(base / "sae.pt")
+
+
+def resolve_checkpoint_path(config, target=None) -> str:
+    configured_save_path = _config_get(config, "train.save_path")
+    if configured_save_path:
+        return str(configured_save_path)
+
+    configured_output_path = _config_get(config, "train.output_model_path")
+    if configured_output_path:
+        return str(configured_output_path)
+
+    return default_checkpoint_path(config, target=target)
 
 
 def default_feature_mapping_dir(config, target=None) -> str:
@@ -72,7 +173,7 @@ def resolve_best_checkpoint(config, target=None) -> str:
     3. `sae_lambda_X.pt` — first available vanilla sweep checkpoint
     4. Fallback to default path (may not exist)
     """
-    default_path = Path(default_checkpoint_path(config, target=target))
+    default_path = Path(resolve_checkpoint_path(config, target=target))
 
     if default_path.exists():
         return str(default_path)
@@ -99,4 +200,3 @@ def resolve_best_checkpoint(config, target=None) -> str:
 
     # Last resort: return default path even if missing (callers will raise)
     return str(default_path)
-

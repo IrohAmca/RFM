@@ -9,17 +9,13 @@ from pathlib import Path
 from rfm.config import ConfigManager
 from rfm.analysis.autointerp import FeatureAutoInterp, GROQ_BASE_URL
 from rfm.analysis.clustering import FeatureClustering
+from rfm.layout import default_feature_mapping_dir, model_slug, resolve_best_checkpoint, resolve_requested_targets
 
 
 def _resolve_targets(config: ConfigManager, layer: str | None = None) -> list[str]:
     if layer:
         return [layer]
-    raw = config.get("extraction.target")
-    if isinstance(raw, list):
-        return raw
-    if raw:
-        return [raw]
-    return ["blocks.0.hook_resid_post"]
+    return resolve_requested_targets(config)
 
 
 def _resolve_events_csv(mapping_dir: Path, slug: str) -> Path | None:
@@ -65,14 +61,13 @@ def compute_autointerp(
     resume: bool = True,
 ):
     """Run auto-interpretation for features."""
-    from rfm.layout import model_slug, default_feature_mapping_dir
-
     slug = model_slug(config)
     targets = _resolve_targets(config, layer=layer)
     missing_targets = []
 
     for target in targets:
-        mapping_dir = Path(default_feature_mapping_dir(config, target=target))
+        target_config = config.for_target(target)
+        mapping_dir = Path(default_feature_mapping_dir(target_config, target=target))
         events_csv = _resolve_events_csv(mapping_dir, slug)
         output_path = mapping_dir / f"{slug}_autointerp_results.json"
 
@@ -82,15 +77,20 @@ def compute_autointerp(
 
         print(f"[autointerp] Target layer: {target}")
         print(f"Loading events from {events_csv}...")
+
+        # Use custom system prompt from config if defined (e.g. safety-focused prompt)
+        system_prompt = target_config.get("autointerp.system_prompt", None)
+
         interp = FeatureAutoInterp(
             events_csv,
             backend="openai",
             api_key=api_key,
             base_url=base_url,
             request_delay=request_delay,
+            system_prompt=system_prompt,
         )
 
-        top_k_contexts = config.get("autointerp.contexts_per_feature", 15)
+        top_k_contexts = target_config.get("autointerp.contexts_per_feature", 15)
 
         try:
             summary_csv = _resolve_summary_csv(mapping_dir, slug)
@@ -142,12 +142,11 @@ def compute_autointerp(
 
 def compute_clusters(config: ConfigManager, clusters: int = 20, layer: str = None):
     """Run hierarchical clustering on SAE features."""
-    from rfm.layout import default_feature_mapping_dir, model_slug, resolve_best_checkpoint
-
     slug = model_slug(config)
     for target in _resolve_targets(config, layer=layer):
-        checkpoint_path = Path(resolve_best_checkpoint(config, target=target))
-        mapping_dir = Path(default_feature_mapping_dir(config, target=target))
+        target_config = config.for_target(target)
+        checkpoint_path = Path(resolve_best_checkpoint(target_config, target=target))
+        mapping_dir = Path(default_feature_mapping_dir(target_config, target=target))
 
         if not checkpoint_path.exists():
             print(f"Error: Checkpoint not found at {checkpoint_path}. Have you trained the SAE?")

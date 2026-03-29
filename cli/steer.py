@@ -7,8 +7,8 @@ from pathlib import Path
 import torch
 
 from rfm.config import ConfigManager
-from rfm.layout import default_feature_mapping_dir, resolve_best_checkpoint
-from rfm.sae.model import SparseAutoEncoder
+from rfm.layout import default_feature_mapping_dir, resolve_best_checkpoint, resolve_requested_targets
+from rfm.sae.model import load_sae_checkpoint
 from rfm.steering.patching import activation_patch, batch_feature_patching
 from rfm.steering.emotion_probe import EmotionProbe
 
@@ -51,12 +51,7 @@ def parse_args():
 
 
 def _resolve_targets(config):
-    raw = config.get("extraction.target")
-    if isinstance(raw, list):
-        return raw
-    if raw:
-        return [raw]
-    return ["blocks.0.hook_resid_post"]
+    return resolve_requested_targets(config)
 
 
 def _load_model_and_sae(config, target):
@@ -75,26 +70,20 @@ def _load_model_and_sae(config, target):
     if not sae_path:
         sae_path = resolve_best_checkpoint(config, target=target)
 
-    checkpoint = torch.load(sae_path, map_location="cpu", weights_only=False)
-    sae_config = checkpoint.get("config", {}).get("sae", {})
-    input_dim = checkpoint["state_dict"]["b_pre"].shape[0]
-    hidden_dim = int(sae_config.get("hidden_dim", 3072))
-
-    sae_model = SparseAutoEncoder(input_dim, hidden_dim)
-    sae_model.load_state_dict(checkpoint["state_dict"])
-    sae_model.to(device)
+    sae_model, _ = load_sae_checkpoint(sae_path, device=device)
     sae_model.eval()
 
     return hf_model, tokenizer, sae_model
 
 
 def cmd_discover(args):
-    config = ConfigManager.from_file(args.config)
+    base_config = ConfigManager.from_file(args.config)
     
     target = args.layer
     if not target:
-        targets = _resolve_targets(config)
+        targets = _resolve_targets(base_config)
         target = targets[0] if targets else "blocks.0.hook_resid_post"
+    config = base_config.for_target(target)
         
     events_csv = args.events_csv
     if not events_csv:
@@ -126,7 +115,7 @@ def cmd_discover(args):
 
 
 def cmd_steer(args):
-    config = ConfigManager.from_file(args.config)
+    config = ConfigManager.from_file(args.config).for_target(args.layer)
     hf_model, tokenizer, sae_model = _load_model_and_sae(config, args.layer)
     from rfm.steering.hook import HFSteeringHook
 
@@ -172,7 +161,7 @@ def cmd_steer(args):
 
 
 def cmd_patch(args):
-    config = ConfigManager.from_file(args.config)
+    config = ConfigManager.from_file(args.config).for_target(args.layer)
     model, tokenizer, sae_model = _load_model_and_sae(config, args.layer)
 
     if args.feature_id is not None:

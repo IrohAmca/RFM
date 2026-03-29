@@ -10,6 +10,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
+from rfm.layout import resolve_requested_targets
+
 DEFAULT_METRICS = [
     "train_loss",
     "train_recon",
@@ -428,12 +430,7 @@ def build_mapping_sequence_timeline(events_rows, output_path: Path):
 
 
 def _resolve_targets(config):
-    raw = config.get("extraction.target")
-    if isinstance(raw, list):
-        return raw
-    if raw:
-        return [raw]
-    return ["blocks.0.hook_resid_post"]
+    return resolve_requested_targets(config)
 
 
 def _mode_output_dir(base_config, mode, target, override_dir):
@@ -455,9 +452,10 @@ def _mode_output_dir(base_config, mode, target, override_dir):
 
 
 def _configured_training_args(base_config, target, pattern):
-    from rfm.layout import default_checkpoint_path
+    target_config = base_config.for_target(target)
+    from rfm.layout import resolve_checkpoint_path
 
-    checkpoint_path = Path(default_checkpoint_path(base_config, target=target))
+    checkpoint_path = Path(resolve_checkpoint_path(target_config, target=target))
     return {
         "checkpoints_dir": str(checkpoint_path.parent),
         "pattern": pattern,
@@ -465,14 +463,18 @@ def _configured_training_args(base_config, target, pattern):
 
 
 def _configured_mapping_args(base_config, target, top_features):
+    target_config = base_config.for_target(target)
     from rfm.layout import default_feature_mapping_dir
 
-    mapping_dir = Path(default_feature_mapping_dir(base_config, target=target))
-    summary_path = mapping_dir / "feature_mapping_feature_summary.csv"
+    mapping_cfg = target_config.get("feature-mapping", {})
+    mapping_dir = Path(default_feature_mapping_dir(target_config, target=target))
+    events_path = Path(mapping_cfg.get("event_output_path", str(mapping_dir / "feature_mapping_events.csv")))
+    summary_path = Path(mapping_cfg.get("summary_csv_output_path", str(mapping_dir / "feature_mapping_feature_summary.csv")))
+    token_pairs_path = summary_path.with_name(summary_path.stem + "_token_pairs.csv")
     return {
-        "mapping_events_csv": str(mapping_dir / "feature_mapping_events.csv"),
+        "mapping_events_csv": str(events_path),
         "mapping_summary_csv": str(summary_path),
-        "mapping_token_pairs_csv": str(summary_path.with_name(summary_path.stem + "_token_pairs.csv")),
+        "mapping_token_pairs_csv": str(token_pairs_path),
         "top_features": top_features,
     }
 

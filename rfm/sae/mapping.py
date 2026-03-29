@@ -8,8 +8,13 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from rfm.config import ConfigManager
-from rfm.layout import default_checkpoint_path, default_feature_mapping_dir, resolve_best_checkpoint
-from rfm.sae.model import SparseAutoEncoder
+from rfm.layout import (
+    default_feature_mapping_dir,
+    resolve_activations_dir,
+    resolve_best_checkpoint,
+    resolve_requested_targets,
+)
+from rfm.sae.model import build_sae, load_sae_checkpoint
 
 
 class FeatureMapping:
@@ -45,13 +50,12 @@ class FeatureMapping:
         if isinstance(paths, str):
             paths = [paths]
         if not paths:
-            from rfm.layout import default_activations_dir
-            act_dir = default_activations_dir(self.config)
+            act_dir = resolve_activations_dir(self.config, target=self._cfg_value("extraction.target"))
             pt_files = sorted(Path(act_dir).glob("*.pt"))
             paths = [str(p) for p in pt_files]
             
         if not isinstance(paths, list) or not paths:
-            act_dir = default_activations_dir(self.config)
+            act_dir = resolve_activations_dir(self.config, target=self._cfg_value("extraction.target"))
             raise ValueError(f"Could not find activation files in {act_dir} or config.datasets.path")
         return paths
 
@@ -154,23 +158,19 @@ class FeatureMapping:
                     global_token_idx += 1
                 global_sequence_idx += 1
 
-    def get_model_config(self, model_path):
-        base_config = torch.load(model_path, map_location="cpu", weights_only=False).get("config", {})
-        if not base_config:
-            raise ValueError(f"Model checkpoint at {model_path} does not contain config information.")
-        return base_config.get("sae", {})
-
     def load_sae_model(self, input_dim):
         model_path = self._cfg_section("feature-mapping").get("model_path")
-        checkpoint_config = self.get_model_config(model_path) if model_path else {}
-
-        hidden_dim = int(checkpoint_config.get("hidden_dim", self._cfg_section("sae").get("hidden_dim", 128)))
-        sparsity_weight = checkpoint_config.get("sparsity_weight", 1e-3)
-
-        model = SparseAutoEncoder(input_dim, hidden_dim, sparsity_weight)
         if model_path:
-            model.load_model(model_path, device=self.device)
-        return model.to(self.device)
+            model, _ = load_sae_checkpoint(
+                model_path,
+                device=self.device,
+                expected_input_dim=input_dim,
+            )
+            return model
+
+        sae_config = self._cfg_section("sae")
+        hidden_dim = int(sae_config.get("hidden_dim", 128))
+        return build_sae(input_dim=input_dim, hidden_dim=hidden_dim, sae_config=sae_config).to(self.device)
 
     def infer_input_dim(self):
         first_path = self._dataset_paths()[0]
@@ -304,7 +304,7 @@ class FeatureMapping:
         event_output_path = mapping_cfg.get("event_output_path", str(base_mapping_dir / "feature_mapping_events.csv"))
         summary_txt_path = mapping_cfg.get("summary_output_path", str(base_mapping_dir / "feature_mapping_summary.txt"))
         summary_csv_path = mapping_cfg.get("summary_csv_output_path", str(base_mapping_dir / "feature_mapping_feature_summary.csv"))
-        checkpoint_path = mapping_cfg.get("model_path") or default_checkpoint_path(self.config)
+        checkpoint_path = mapping_cfg.get("model_path") or resolve_best_checkpoint(self.config, target=self._cfg_value("extraction.target"))
         show_token_progress = bool(mapping_cfg.get("show_token_progress", True))
 
         input_dim = self.infer_input_dim()
@@ -361,10 +361,7 @@ class FeatureMapping:
 
 
 def _resolve_targets(config):
-    raw = config.get("extraction.target")
-    if isinstance(raw, list):
-        return raw
-    return [raw]
+    return resolve_requested_targets(config)
 
 
 if __name__ == "__main__":
@@ -380,19 +377,18 @@ if __name__ == "__main__":
         print(f"[mapping] Processing target layer: {target}")
         print(f"{'#'*60}")
         
-        config = ConfigManager.from_file(args.config)
-        config.set("extraction.target", target)
+        config = base_config.for_target(target)
         
-        from rfm.layout import default_activations_dir, default_checkpoint_path, default_feature_mapping_dir
+        from rfm.layout import default_feature_mapping_dir
         from pathlib import Path
         
-        act_dir = default_activations_dir(base_config, target=target)
+        act_dir = resolve_activations_dir(config, target=target)
         pt_files = sorted(Path(act_dir).glob("*.pt"))
         if pt_files:
             config.set("datasets.path", [str(p) for p in pt_files])
             
         if not config.get("feature-mapping.model_path"):
-            best_ckpt = resolve_best_checkpoint(base_config, target=target)
+            best_ckpt = resolve_best_checkpoint(config, target=target)
             config.set("feature-mapping.model_path", best_ckpt)
             
         base_mapping_dir = Path(default_feature_mapping_dir(base_config, target=target))

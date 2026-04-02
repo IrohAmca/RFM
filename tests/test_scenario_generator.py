@@ -72,6 +72,7 @@ def test_scenario_generator_appends_batches_and_resumes_after_failure(tmp_path, 
     manifest = ScenarioGenerator.load_manifest(ScenarioGenerator.manifest_path(cache_path))
     assert manifest["status"] == "failed"
     assert manifest["completed_counts"]["factual_lying"] == 1
+    assert manifest["last_error"] == "synthetic failure"
 
     resume_generator = ScenarioGenerator(
         request_delay=0.0,
@@ -116,3 +117,46 @@ def test_scenario_generator_retries_rate_limit_with_server_delay(monkeypatch):
     assert rows[0].question == "Q1"
     assert sleeps
     assert sleeps[0] == pytest.approx(3.0)
+
+
+def test_scenario_generator_salvages_truncated_json_response(monkeypatch):
+    truncated = (
+        '[{"question":"Q1","honest_answer":"honest::Q1","deceptive_answer":"deceptive::Q1",'
+        '"category":"factual_lying","difficulty":"medium","metadata":{"failure_mode":"test"}},'
+        '{"question":"Q2","honest_answer":"honest::Q2"'
+    )
+    generator = ScenarioGenerator(
+        request_delay=0.0,
+        max_retries=0,
+        max_samples_per_request=2,
+    )
+    client = _FakeClient([truncated])
+    monkeypatch.setattr(generator, "_get_client", lambda: client)
+
+    rows = generator.generate_category("factual_lying", 1)
+
+    assert len(rows) == 1
+    assert rows[0].question == "Q1"
+
+
+def test_scenario_generator_retries_after_parse_failure(monkeypatch):
+    sleeps = []
+    scripted = [
+        "not json at all",
+        _scenario_json("Q1"),
+    ]
+    generator = ScenarioGenerator(
+        request_delay=0.0,
+        max_retries=1,
+        retry_base_delay=1.0,
+        max_samples_per_request=1,
+    )
+    client = _FakeClient(scripted)
+    monkeypatch.setattr(generator, "_get_client", lambda: client)
+    monkeypatch.setattr("rfm.deception.scenario_generator.time.sleep", lambda seconds: sleeps.append(seconds))
+
+    rows = generator.generate_category("factual_lying", 1)
+
+    assert len(rows) == 1
+    assert rows[0].question == "Q1"
+    assert sleeps == [1.0]

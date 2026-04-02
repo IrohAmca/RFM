@@ -1,6 +1,6 @@
 import torch
 
-from cli.deception_cycle import run_direction, run_monitor, run_probe
+from cli.deception_cycle import run_direction, run_extract, run_monitor, run_probe
 from rfm.config import ConfigManager
 
 
@@ -75,3 +75,51 @@ def test_deception_cycle_direction_probe_monitor_pipeline(tmp_path, monkeypatch)
 
     monitor_report = run_monitor(cfg, "blocks.0.hook_resid_post")
     assert monitor_report["detection_rate"] >= 0.5
+
+
+def test_run_extract_auto_generates_scenarios(monkeypatch):
+    calls = {"generate": 0, "extract": 0}
+
+    monkeypatch.setattr(
+        "cli.deception_cycle.run_generate",
+        lambda config: calls.__setitem__("generate", calls["generate"] + 1) or [],
+    )
+
+    class _FakeExtractor:
+        def __init__(self, config):
+            self.model_name = "test/model"
+            self.tokenizer = object()
+
+    class _FakeDataset:
+        def __init__(self, config=None, mode="paired"):
+            self.config = config
+            self.mode = mode
+
+        def load(self):
+            return None
+
+    monkeypatch.setattr("cli.deception_cycle.HFGenerationExtractor", _FakeExtractor)
+    monkeypatch.setattr("cli.deception_cycle.DeceptionDataset", _FakeDataset)
+    monkeypatch.setattr(
+        "cli.deception_cycle.extract_all_targets",
+        lambda targets, extractor, dataset, config: calls.__setitem__("extract", calls["extract"] + 1),
+    )
+
+    cfg = ConfigManager(
+        {
+            "model_name": "test/model",
+            "layers": {
+                "blocks.0.hook_resid_post": {},
+            },
+            "deception": {
+                "extraction": {
+                    "auto_generate_scenarios": True,
+                },
+            },
+        }
+    )
+
+    run_extract(cfg, "blocks.0.hook_resid_post", ensure_scenarios=True)
+
+    assert calls["generate"] == 1
+    assert calls["extract"] == 1

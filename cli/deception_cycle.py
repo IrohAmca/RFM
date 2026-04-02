@@ -92,7 +92,14 @@ def run_generate(config) -> list[dict]:
     return [scenario.to_dict() for scenario in scenarios]
 
 
-def run_extract(config, layer_override: str | None = None) -> None:
+def run_extract(
+    config,
+    layer_override: str | None = None,
+    *,
+    ensure_scenarios: bool = True,
+) -> None:
+    if ensure_scenarios and bool(config.get("deception.extraction.auto_generate_scenarios", True)):
+        run_generate(config)
     extractor = HFGenerationExtractor(config)
     dataset = DeceptionDataset(config=config, mode="paired")
     dataset.load()
@@ -349,7 +356,7 @@ def run_phase(config, phase: str, layer_override: str | None = None):
     if phase == "generate":
         return run_generate(config)
     if phase == "extract":
-        return run_extract(config, layer_override)
+        return run_extract(config, layer_override, ensure_scenarios=True)
     if phase == "direction":
         return run_direction(config, layer_override)
     if phase == "probe":
@@ -360,7 +367,7 @@ def run_phase(config, phase: str, layer_override: str | None = None):
         return run_adversarial(config, layer_override)
 
     run_generate(config)
-    run_extract(config, layer_override)
+    run_extract(config, layer_override, ensure_scenarios=False)
     run_direction(config, layer_override)
     run_probe(config, layer_override)
     run_monitor(config, layer_override)

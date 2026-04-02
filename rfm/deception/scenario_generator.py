@@ -75,7 +75,7 @@ def _extract_json_blob(text: str) -> str:
 
 
 class ScenarioGenerator:
-    """Generate deception scenarios with durable caching and retry."""
+    """Generate deception scenarios through the Groq API with durable caching and retry."""
 
     def __init__(
         self,
@@ -91,6 +91,10 @@ class ScenarioGenerator:
         system_prompt: str | None = None,
     ):
         self.provider = str(provider or "groq").lower()
+        if self.provider != "groq":
+            raise ValueError(
+                f"ScenarioGenerator only supports provider='groq'. Got {self.provider!r}."
+            )
         self.model = model
         self.api_key = api_key or self._env_api_key()
         self.base_url = base_url or self._default_base_url()
@@ -122,16 +126,10 @@ class ScenarioGenerator:
         )
 
     def _env_api_key(self) -> str | None:
-        if self.provider == "groq":
-            return os.getenv("GROQ_API_KEY")
-        if self.provider == "openai":
-            return os.getenv("OPENAI_API_KEY")
-        return os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY")
+        return os.getenv("GROQ_API_KEY")
 
     def _default_base_url(self) -> str | None:
-        if self.provider == "groq":
-            return GROQ_BASE_URL
-        return None
+        return GROQ_BASE_URL
 
     def _get_client(self):
         if self._client is not None:
@@ -139,7 +137,12 @@ class ScenarioGenerator:
         try:
             from openai import OpenAI
         except ImportError as exc:
-            raise ImportError("openai package is required for scenario generation.") from exc
+            raise ImportError(
+                "openai package is required as the HTTP client for Groq scenario generation."
+            ) from exc
+
+        if not self.api_key:
+            raise ValueError("GROQ_API_KEY is required for scenario generation.")
 
         kwargs = {}
         if self.api_key:

@@ -1,3 +1,4 @@
+import gc
 import math
 
 from rfm.sae.model import SAEFactory
@@ -119,16 +120,29 @@ def train(config):
     k = int(sae_config.get("topk_k", 32))
     aux_alpha = float(sae_config.get("aux_alpha", 1/32))
 
-    model = SAEFactory.create(
-        architecture=architecture,
+    # Use build_sae which handles all architecture-specific kwargs
+    # (matryoshka_levels, balance_multiplier, etc.) from sae_config
+    from rfm.sae.model import build_sae
+    model = build_sae(
         input_dim=input_dim,
         hidden_dim=hidden_dim,
-        sparsity_weight=sparsity_weight,
-        k=k,
-        aux_alpha=aux_alpha,
+        sae_config=sae_config,
     ).to(device)
 
     model.set_pre_bias(dataset.get_mean_activation().to(device))
+
+    # ── VRAM cleanup: free any leftover GPU memory from previous steps ──
+    gc.collect()
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+        vram_free = torch.cuda.mem_get_info(device)[0] / 1024**3
+        vram_total = torch.cuda.mem_get_info(device)[1] / 1024**3
+        print(f"[train] VRAM: {vram_free:.1f}GB free / {vram_total:.1f}GB total")
+
+    # Mixed precision: use autocast for CUDA training to save VRAM
+    use_amp = device.type == "cuda"
+    if use_amp:
+        print("[train] Using mixed precision (autocast) for CUDA training")
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -189,8 +203,9 @@ def train(config):
         for step, (x,) in enumerate(progress, start=1):
             x = x.to(device)
 
-            x_hat, f = model(x)
-            total_loss, recon_loss, sparsity_loss = model.compute_loss(x, x_hat, f)
+            with torch.autocast(device_type=device.type, enabled=use_amp):
+                x_hat, f = model(x)
+                total_loss, recon_loss, sparsity_loss = model.compute_loss(x, x_hat, f)
             active_rate = (f > active_threshold).float().mean()
 
             optimizer.zero_grad(set_to_none=True)

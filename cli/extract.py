@@ -39,6 +39,9 @@ def resolve_dtype(name):
 def parse_args():
     parser = argparse.ArgumentParser(description="Extract activations from an LLM.")
     parser.add_argument("--config", type=str, required=True, help="Path to config file.")
+    parser.add_argument("--layer", type=str, default=None,
+                        help="Extract activations for a specific layer only (e.g. blocks.6.hook_resid_post). "
+                             "If not set, extracts all configured layers.")
     return parser.parse_args()
 
 
@@ -248,7 +251,10 @@ def main():
     dataloader = BaseDataLoader(base_config)
     dataloader.load()
 
-    targets = resolve_requested_targets(base_config)
+    if args.layer:
+        targets = [args.layer]
+    else:
+        targets = resolve_requested_targets(base_config)
 
     if hasattr(extractor, "extract_batch_multi"):
         extract_all_targets_batched(targets, extractor, dataloader, base_config)

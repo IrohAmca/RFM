@@ -17,6 +17,9 @@ from rfm.sae.train import train
 def parse_args():
     parser = argparse.ArgumentParser(description="Train a Sparse Autoencoder on extracted activations.")
     parser.add_argument("--config", type=str, required=True, help="Path to config file.")
+    parser.add_argument("--layer", type=str, default=None,
+                        help="Train SAE for a specific layer only (e.g. blocks.6.hook_resid_post). "
+                             "If not set, trains all configured layers sequentially.")
     return parser.parse_args()
 
 
@@ -98,14 +101,16 @@ def _run_sweep(config):
         print(f"[train] Saved → {save_path}")
 
 
-def _resolve_targets(config):
+def _resolve_targets(config, layer=None):
+    if layer:
+        return [layer]
     return resolve_requested_targets(config)
 
 
 def main():
     args = parse_args()
     base_config = ConfigManager.from_file(args.config)
-    targets = _resolve_targets(base_config)
+    targets = _resolve_targets(base_config, layer=args.layer)
     
     for target in targets:
         print(f"\n{'#'*60}")

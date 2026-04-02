@@ -1,7 +1,7 @@
 {
   "model_name": "Qwen/Qwen3-0.6B",
   "dataloader": {
-    "dataset_name": "skg/toxigen-data",
+    "dataset_name": "synthetic_deception",
     "dataset_config_name": "annotated",
     "split": "train",
     "data_dir": null,

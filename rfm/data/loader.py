@@ -28,6 +28,40 @@ class BaseDataLoader:
         return {}
 
     def load(self):
+        if self.dataset_name == "synthetic_deception":
+            from rfm.data.deception_dataset import DeceptionDatasetBuilder
+            builder = DeceptionDatasetBuilder()
+            samples = builder.get_synthetic_samples()
+            pairs = builder.build_contrastive_pairs(samples)
+            
+            # Map BeaverTails-compatible format
+            class DeceptionListDataset:
+                def __init__(self, data):
+                    self.data = data
+                def __iter__(self):
+                    return iter(self.data)
+                def filter(self, *args, **kwargs):
+                    return self
+            
+            # Rename prompt/response keys dynamically to match config if needed
+            text_field = self.config.get("dataloader.text_field", "prompt")
+            resp_field = self.config.get("dataloader.response_field", "response")
+            lbl_field = self.config.get("safety.label_field", "is_safe")
+            
+            formatted = []
+            for p in pairs:
+                item = {
+                    text_field: p["prompt"],
+                    resp_field: p["response"],
+                    "category": p["category"],
+                    lbl_field: p["label"] == "safe" or p["label"] == "truthful",
+                    "deception_label": p["label"]
+                }
+                formatted.append(item)
+                
+            self.dataset = DeceptionListDataset(formatted)
+            return
+
         kwargs = {
             "split": self.split,
             "streaming": self.streaming,

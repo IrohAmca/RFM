@@ -89,11 +89,15 @@ Output includes per-sample `labels` in chunk metadata, enabling contrastive anal
 
 ### Phase 2 — SAE Training
 
-```bash
-python -m cli.train --config configs/models/qwen3-0.6B.safety-gen.json
-```
-
 Uses TopK SAE architecture. Trains on all activations (toxic + safe) — SAE must reconstruct both distributions. Class separation happens in Phase 3, not here.
+
+```bash
+# Train all layers sequentially
+python -m cli.train --config configs/models/qwen3-0.6B.safety-gen.json
+
+# Train a single layer (recommended for 4GB VRAM)
+python -m cli.train --config configs/models/qwen3-0.6B.safety-gen.json --layer blocks.6.hook_resid_post
+```
 
 ### Phase 3 — Contrastive Safety Scoring
 
@@ -112,6 +116,13 @@ Identifies which SAE features are most associated with toxic generation.
 python -m cli.safety_score \
   --config configs/models/qwen3-0.6B.safety-gen.json \
   --mode contrastive \
+  --top-k 50
+
+# Single layer scoring
+python -m cli.safety_score \
+  --config configs/models/qwen3-0.6B.safety-gen.json \
+  --mode contrastive \
+  --layer blocks.6.hook_resid_post \
   --top-k 50
 ```
 
@@ -295,11 +306,40 @@ New: N_samples / batch_size = 8000 / 16 = 500 forward passes (64× faster)
 Key extraction config:
 ```json
 "extraction": {
-  "batch_size": 16,    // samples per forward pass
-  "max_length": 512,   // token truncation (helps VRAM)
+  "batch_size": 4,     // keep low on 4GB VRAM (4-8 recommended)
+  "max_length": 256,   // token truncation (256 for 4GB, 512 for 8GB+)
   "device": "cuda",    // explicit — avoid accidental CPU fallback
   "dtype": "bfloat16"
 }
+```
+
+### Low-VRAM Guide (4GB GPU)
+
+For GPUs with limited VRAM (e.g. GTX 1650, RTX 3050 4GB):
+
+| Parameter | 4GB VRAM | 8GB+ VRAM |
+|---|---|---|
+| `extraction.batch_size` | 4 | 16 |
+| `extraction.max_length` | 256 | 512 |
+| `sae.hidden_dim` | 8192 | 32768 |
+| `train.batch_size` | 1024 | 4096 |
+| `train.device` | `"cpu"` | `"cuda"` |
+| `generation.max_new_tokens` | 128 | 256 |
+
+Recommended layer-by-layer workflow for 4GB VRAM:
+
+```bash
+# Step 1: Extract all layers (single pass, GPU handles one batch at a time)
+python -m cli.extract_generate --config configs/models/qwen3-0.6B.safety-gen.json
+
+# Step 2: Train SAE layer by layer (CPU training, one at a time)
+python -m cli.train --config configs/models/qwen3-0.6B.safety-gen.json --layer blocks.6.hook_resid_post
+python -m cli.train --config configs/models/qwen3-0.6B.safety-gen.json --layer blocks.13.hook_resid_post
+python -m cli.train --config configs/models/qwen3-0.6B.safety-gen.json --layer blocks.20.hook_resid_post
+python -m cli.train --config configs/models/qwen3-0.6B.safety-gen.json --layer blocks.27.hook_resid_post
+
+# Step 3: Score layers individually
+python -m cli.safety_score --config configs/models/qwen3-0.6B.safety-gen.json --layer blocks.6.hook_resid_post
 ```
 
 ### Device Resolution

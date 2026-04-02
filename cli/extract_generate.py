@@ -54,6 +54,9 @@ def parse_args():
         choices=["replay", "generate"],
         help="'replay' uses dataset responses; 'generate' lets the model produce its own.",
     )
+    parser.add_argument("--layer", type=str, default=None,
+                        help="Extract for a specific layer only (e.g. blocks.6.hook_resid_post). "
+                             "If not set, extracts all configured layers in a single forward pass.")
     return parser.parse_args()
 
 
@@ -333,7 +336,10 @@ def main():
     dataloader = BaseDataLoader(base_config)
     dataloader.load()
 
-    targets = resolve_requested_targets(base_config)
+    if args.layer:
+        targets = [args.layer]
+    else:
+        targets = resolve_requested_targets(base_config)
     print(f"[extract_gen] Requested targets: {targets}")
 
     # All layers extracted in a single forward pass per sample

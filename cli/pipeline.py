@@ -93,8 +93,12 @@ def main():
             if start_idx > STEP_ORDER.index("mapping"):
                 args.skip_mapping = True
 
+        config = ConfigManager.from_file(args.config)
+        extractor_backend = config.get("extraction.extractor_backend", "hf_causal")
+        extract_module = "cli.extract_generate" if extractor_backend in ("hf_generate", "generate") else "cli.extract"
+
         all_steps = [
-            ("extract",  "Extraction",      not args.skip_extract,  [python, "-m", "cli.extract",      "--config", effective_config]),
+            ("extract",  "Extraction",      not args.skip_extract,  [python, "-m", extract_module,     "--config", effective_config]),
             ("train",    "SAE Training",    not args.skip_train,    [python, "-m", "cli.train",         "--config", effective_config]),
             ("mapping",  "Feature Mapping", not args.skip_mapping,  [python, "-m", "rfm.sae.mapping",   "--config", effective_config]),
             ("viz",      "Visualization",   not args.skip_viz,      [python, "-m", "rfm.viz.plots", "--mode", "all", "--config", effective_config]),

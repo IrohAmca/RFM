@@ -35,6 +35,9 @@ def parse_args():
     )
     parser.add_argument("--top-k", type=int, default=50, help="Number of top features to report.")
     parser.add_argument("--output-dir", default=None, help="Override output directory.")
+    parser.add_argument("--layer", type=str, default=None,
+                        help="Score a specific layer only (e.g. blocks.6.hook_resid_post). "
+                             "If not set, scores all configured layers.")
     return parser.parse_args()
 
 
@@ -204,7 +207,11 @@ def cmd_cross_layer(config, targets, top_k, output_base):
 def main():
     args = parse_args()
     config = ConfigManager.from_file(args.config)
-    targets = resolve_requested_targets(config)
+
+    if args.layer:
+        targets = [args.layer]
+    else:
+        targets = resolve_requested_targets(config)
 
     if args.mode == "contrastive":
         cmd_contrastive(config, targets, args.top_k, args.output_dir)

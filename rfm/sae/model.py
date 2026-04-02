@@ -2,6 +2,24 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# Lazy import to avoid circular dependency — registered in SAEFactory below
+_BalanceMatryoshkaSAE = None
+_GraphRegularizedSAE = None
+
+def _get_matryoshka_cls():
+    global _BalanceMatryoshkaSAE
+    if _BalanceMatryoshkaSAE is None:
+        from rfm.sae.matryoshka import BalanceMatryoshkaSAE
+        _BalanceMatryoshkaSAE = BalanceMatryoshkaSAE
+    return _BalanceMatryoshkaSAE
+
+def _get_gsae_cls():
+    global _GraphRegularizedSAE
+    if _GraphRegularizedSAE is None:
+        from rfm.sae.gsae import GraphRegularizedSAE
+        _GraphRegularizedSAE = GraphRegularizedSAE
+    return _GraphRegularizedSAE
+
 
 class SparseAutoEncoder(torch.nn.Module):
     def __init__(self, input_dim, hidden_dim, sparsity_weight=1e-3):
@@ -165,6 +183,8 @@ class SAEFactory:
         "vanilla": SparseAutoEncoder,
         "topk": TopKSAE,
         "gated": GatedSAE,
+        "matryoshka": None,  # Lazy-loaded to avoid circular import
+        "gsae": None,        # Lazy-loaded to avoid circular import
     }
 
     @classmethod
@@ -176,8 +196,15 @@ class SAEFactory:
         if arch_lower not in cls.REGISTRY:
             print(f"Warning: Architecture '{architecture}' not found. Falling back to 'vanilla'.")
             arch_lower = "vanilla"
-            
-        sae_cls = cls.REGISTRY[arch_lower]
+
+        # Lazy-load matryoshka and gsae
+        if arch_lower == "matryoshka":
+            sae_cls = _get_matryoshka_cls()
+        elif arch_lower == "gsae":
+            sae_cls = _get_gsae_cls()
+        else:
+            sae_cls = cls.REGISTRY[arch_lower]
+
         # pass kwargs to handle differences between architectures
         return sae_cls(input_dim=input_dim, hidden_dim=hidden_dim, **kwargs)
 
@@ -188,9 +215,22 @@ def build_sae(input_dim, hidden_dim, sae_config=None):
     sparsity_weight = float(sae_config.get("sparsity_weight", 1e-3))
 
     kwargs = {}
-    if architecture == "topk":
+    if architecture in ("topk", "matryoshka", "gsae"):
         kwargs["k"] = int(sae_config.get("topk_k", 32))
         kwargs["aux_alpha"] = float(sae_config.get("aux_alpha", 1 / 32))
+
+        if architecture == "matryoshka":
+            if "matryoshka_levels" in sae_config:
+                kwargs["matryoshka_levels"] = [
+                    int(lv) for lv in sae_config["matryoshka_levels"]
+                ]
+            kwargs["balance_multiplier"] = float(
+                sae_config.get("balance_multiplier", 0.75)
+            )
+
+        if architecture == "gsae":
+            kwargs["graph_lambda"] = float(sae_config.get("graph_lambda", 0.01))
+            kwargs["graph_knn"] = int(sae_config.get("graph_knn", 10))
     else:
         kwargs["sparsity_weight"] = sparsity_weight
 

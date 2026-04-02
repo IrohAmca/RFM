@@ -77,6 +77,8 @@ class CrossLayerAnalyzer:
         risky_features: dict[str, list[int]] | None = None,
         top_k_per_layer: int = 50,
         max_tree_depth: int = 5,
+        positive_label: str = "toxic",
+        negative_label: str = "safe",
     ) -> dict:
         """Run full cross-layer analysis.
 
@@ -142,15 +144,22 @@ class CrossLayerAnalyzer:
                 combined_feature_names.append(f"L{short}_F{fid}")
 
         # Binary labels
-        label_map = {"toxic": 1, "safe": 0}
+        label_map = {positive_label: 1, negative_label: 0}
         y = np.array([label_map.get(la, -1) for la in labels])
         valid_mask = y >= 0
         X = combined[valid_mask]
         y = y[valid_mask]
 
-        n_toxic = (y == 1).sum()
-        n_safe = (y == 0).sum()
-        logger.info(f"Combined matrix: {X.shape}, toxic={n_toxic}, safe={n_safe}")
+        n_positive = (y == 1).sum()
+        n_negative = (y == 0).sum()
+        logger.info(
+            "Combined matrix: %s, %s=%s, %s=%s",
+            X.shape,
+            positive_label,
+            n_positive,
+            negative_label,
+            n_negative,
+        )
 
         # ── Step 3: Pairwise co-activation analysis ─────────────────────
         combinations = self._pairwise_coactivation(X, y, combined_feature_names, targets, layer_feature_ids)

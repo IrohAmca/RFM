@@ -47,12 +47,21 @@ def _split_pairs(
     honest: torch.Tensor,
     deceptive: torch.Tensor,
     validation_split: float,
+    seed: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     n = honest.shape[0]
     if n != deceptive.shape[0]:
         raise ValueError("Honest/deceptive tensors must contain the same number of pairs.")
     if n < 2 or validation_split <= 0:
         return honest, deceptive, honest, deceptive
+
+    generator = None
+    if seed is not None:
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(int(seed))
+    indices = torch.randperm(n, generator=generator)
+    honest = honest[indices]
+    deceptive = deceptive[indices]
 
     val_count = min(max(int(round(n * validation_split)), 1), n - 1)
     train_count = n - val_count
@@ -116,6 +125,7 @@ def run_direction(config, layer_override: str | None = None) -> dict[str, Direct
         aggregation=config.get("deception.direction.aggregation", "mean"),
     )
     validation_split = float(config.get("deception.direction.validation_split", 0.2))
+    split_seed = int(config.get("deception.direction.split_seed", config.get("train.split_seed", 42)))
     method = config.get("deception.direction.method", "mean_diff")
     min_cluster = float(config.get("deception.direction.min_cluster_separation", 0.0))
 
@@ -128,6 +138,7 @@ def run_direction(config, layer_override: str | None = None) -> dict[str, Direct
             paired["honest"],
             paired["deceptive"],
             validation_split,
+            split_seed,
         )
         result = finder.find_direction(train_h, train_d, method=method)
         if val_h.shape[0] > 0:
@@ -163,6 +174,7 @@ def _load_directions(config) -> dict[str, DirectionResult]:
 def run_probe(config, layer_override: str | None = None) -> dict[str, dict]:
     summary = {}
     validation_split = float(config.get("deception.direction.validation_split", 0.2))
+    split_seed = int(config.get("deception.direction.split_seed", config.get("train.split_seed", 42)))
     cv_folds = int(config.get("deception.probe.cross_validation_folds", 5))
     directions = _load_directions(config) if _direction_path(config).exists() else {}
     finder = DeceptionDirectionFinder(
@@ -177,6 +189,7 @@ def run_probe(config, layer_override: str | None = None) -> dict[str, dict]:
             paired["honest"],
             paired["deceptive"],
             validation_split,
+            split_seed,
         )
 
         probe = DeceptionProbe()

@@ -1,6 +1,6 @@
 import torch
 
-from cli.deception_cycle import run_direction, run_extract, run_monitor, run_phase, run_probe
+from cli.deception_cycle import _split_pairs, run_direction, run_extract, run_monitor, run_phase, run_probe
 from rfm.config import ConfigManager
 
 
@@ -172,3 +172,18 @@ def test_run_phase_full_includes_train(monkeypatch):
         "adversarial",
     ]
     assert calls[1][1] == {"ensure_scenarios": False}
+
+
+def test_split_pairs_is_deterministic_and_preserves_pair_alignment():
+    honest = torch.arange(12, dtype=torch.float32).view(6, 2)
+    deceptive = honest + 100
+
+    split_a = _split_pairs(honest, deceptive, validation_split=0.33, seed=7)
+    split_b = _split_pairs(honest, deceptive, validation_split=0.33, seed=7)
+
+    for tensor_a, tensor_b in zip(split_a, split_b):
+        assert torch.equal(tensor_a, tensor_b)
+
+    train_h, train_d, val_h, val_d = split_a
+    assert torch.equal(train_d - train_h, torch.full_like(train_h, 100))
+    assert torch.equal(val_d - val_h, torch.full_like(val_h, 100))

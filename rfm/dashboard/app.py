@@ -580,10 +580,15 @@ def render_deception_monitor(config):
         st.info("Run adversarial phase: `python -m cli.deception_cycle --phase adversarial`")
 
 
-def _pipeline_status(dec_dir: str) -> dict:
+def _pipeline_status(dec_dir: str, config=None) -> dict:
     base = Path(dec_dir)
+    scenario_path = base / "contextual_scenarios.jsonl"
+    if config is not None and hasattr(config, "get"):
+        configured_path = config.get("deception.scenario_generator.cache_path")
+        if configured_path:
+            scenario_path = Path(configured_path)
     return {
-        "scenarios": (base.parent / "contextual_scenarios.jsonl").exists(),
+        "scenarios": scenario_path.exists(),
         "activations": any((base / "contextual_activations").glob("**/*.pt")),
         "checkpoints": any((base / "checkpoints").glob("**/sae.pt")),
         "directions": (base / "directions" / "directions.pt").exists(),
@@ -655,7 +660,7 @@ def render_steering_playground(config, slug, config_path):
             )
 
             dec_dir = str(deception_run_dir(config))
-            status = _pipeline_status(dec_dir)
+            status = _pipeline_status(dec_dir, config)
             if status["directions"]:
                 st.success("✅ Direction vectors found — ready to steer.")
             else:
@@ -716,7 +721,7 @@ def main():
     has_deception = bool(config.get("deception", None))
     if has_deception:
         dec_dir = str(deception_run_dir(config))
-        status = _pipeline_status(dec_dir)
+        status = _pipeline_status(dec_dir, config)
         st.sidebar.markdown("**Pipeline Status**")
         icons = {True: "✅", False: "○"}
         for step, label in [

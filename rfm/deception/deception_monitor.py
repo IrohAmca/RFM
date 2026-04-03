@@ -45,10 +45,11 @@ class DeceptionMonitor:
                 self.directions[layer_name] = torch.as_tensor(value).detach().cpu().float()
                 self.direction_thresholds[layer_name] = 0.0
 
+        self.monitored_layers = list(dict.fromkeys([*self.directions.keys(), *self.probes.keys()]))
         self._captured: dict[str, list[torch.Tensor]] = {}
 
     def reset(self) -> None:
-        self._captured = {layer_name: [] for layer_name in self.directions}
+        self._captured = {layer_name: [] for layer_name in self.monitored_layers}
 
     def consume_activations(self) -> dict[str, torch.Tensor]:
         aggregated = {}
@@ -73,7 +74,7 @@ class DeceptionMonitor:
         self.reset()
         handles = []
 
-        for layer_name in self.directions:
+        for layer_name in self.monitored_layers:
             target_module = resolve_hf_target_module(model, layer_name)
 
             def hook_fn(module, inputs, output, layer_name=layer_name):
@@ -103,6 +104,18 @@ class DeceptionMonitor:
             return 0.0
         return float(sum(scores) / len(scores))
 
+    def _ensemble_threshold(self, observed_layers: list[str]) -> float:
+        layer_thresholds = [
+            float(self.thresholds[layer_name])
+            for layer_name in observed_layers
+            if layer_name in self.thresholds
+        ]
+        if not layer_thresholds:
+            return 0.5
+        if self.ensemble_method == "max":
+            return max(layer_thresholds)
+        return sum(layer_thresholds) / len(layer_thresholds)
+
     def score_generation(self, activations: dict[str, torch.Tensor]) -> DeceptionScore:
         per_layer_scores = {}
         alert_layers = []
@@ -125,11 +138,12 @@ class DeceptionMonitor:
         else:
             deception_probability = sum(per_layer_scores.values()) / len(per_layer_scores)
 
-        alert = bool(alert_layers or deception_probability >= 0.5)
+        ensemble_threshold = self._ensemble_threshold(list(per_layer_scores))
+        alert = bool(alert_layers or deception_probability >= ensemble_threshold)
         explanation = (
             "Alerting layers: " + ", ".join(alert_layers)
             if alert_layers
-            else "No layer crossed its alert threshold."
+            else f"No layer crossed its alert threshold. Ensemble threshold={ensemble_threshold:.3f}."
         )
         return DeceptionScore(
             deception_probability=float(deception_probability),

@@ -429,6 +429,239 @@ def build_mapping_sequence_timeline(events_rows, output_path: Path):
     plt.close(fig)
 
 
+def _save_placeholder_chart(output_path: Path, title: str, message: str):
+    fig, ax = plt.subplots(figsize=(10, 4), constrained_layout=True)
+    ax.axis("off")
+    ax.set_title(title)
+    ax.text(0.5, 0.5, message, ha="center", va="center", fontsize=12, wrap=True)
+    fig.savefig(output_path, dpi=160)
+    plt.close(fig)
+
+
+def build_deception_layer_comparison(layer_rows, output_path: Path):
+    if not layer_rows:
+        _save_placeholder_chart(
+            output_path,
+            "Deception Layer Comparison",
+            "No direction/probe metrics were available.",
+        )
+        return
+
+    labels = [row.get("layer_label", row.get("layer", f"layer_{idx}")) for idx, row in enumerate(layer_rows)]
+    direction_acc = [float(row.get("direction_accuracy", 0.0) or 0.0) for row in layer_rows]
+    probe_val = [float(row.get("probe_validation_accuracy", 0.0) or 0.0) for row in layer_rows]
+    separation = [float(row.get("cluster_separation", 0.0) or 0.0) for row in layer_rows]
+    explained = [float(row.get("explained_variance", 0.0) or 0.0) for row in layer_rows]
+
+    x = np.arange(len(labels))
+    width = 0.35
+
+    fig, axes = plt.subplots(2, 1, figsize=(12, 9), constrained_layout=True)
+
+    axes[0].bar(x - width / 2, direction_acc, width=width, label="direction_accuracy", color="#4e79a7")
+    axes[0].bar(x + width / 2, probe_val, width=width, label="probe_validation_accuracy", color="#f28e2b")
+    axes[0].axhline(0.7, color="#888888", linestyle="--", linewidth=1, label="direction target")
+    axes[0].axhline(0.75, color="#c44e52", linestyle=":", linewidth=1, label="probe target")
+    axes[0].set_title("Direction and Probe Accuracy by Layer")
+    axes[0].set_ylabel("accuracy")
+    axes[0].set_ylim(0.0, 1.05)
+    axes[0].set_xticks(x)
+    axes[0].set_xticklabels(labels)
+    axes[0].grid(axis="y", alpha=0.25)
+    axes[0].legend(loc="best", fontsize=8)
+
+    axes[1].bar(x - width / 2, separation, width=width, label="cluster_separation", color="#59a14f")
+    axes[1].bar(x + width / 2, explained, width=width, label="explained_variance", color="#9c755f")
+    axes[1].axhline(0.3, color="#888888", linestyle="--", linewidth=1, label="separation target")
+    axes[1].set_title("Layer Separation and Explained Variance")
+    axes[1].set_ylabel("score")
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(labels)
+    axes[1].grid(axis="y", alpha=0.25)
+    axes[1].legend(loc="best", fontsize=8)
+
+    fig.savefig(output_path, dpi=160)
+    plt.close(fig)
+
+
+def build_deception_tsne_scatter(tsne_payloads, output_path: Path):
+    if not tsne_payloads:
+        _save_placeholder_chart(
+            output_path,
+            "Honest vs Deceptive Projection",
+            "No activation projection data was available.",
+        )
+        return
+
+    items = list(tsne_payloads.items())
+    cols = 2
+    rows = int(np.ceil(len(items) / cols))
+    fig, axes = plt.subplots(rows, cols, figsize=(14, max(5, rows * 4.5)), constrained_layout=True)
+    axes = np.atleast_1d(axes).reshape(rows, cols)
+
+    for index, (layer_name, payload) in enumerate(items):
+        ax = axes[index // cols, index % cols]
+        points = payload.get("points", [])
+        if not points:
+            ax.axis("off")
+            ax.set_title(payload.get("layer_label", layer_name))
+            ax.text(0.5, 0.5, "No points available", ha="center", va="center")
+            continue
+
+        honest = [point for point in points if point.get("label") == "honest"]
+        deceptive = [point for point in points if point.get("label") == "deceptive"]
+        if honest:
+            ax.scatter(
+                [point["x"] for point in honest],
+                [point["y"] for point in honest],
+                s=18,
+                alpha=0.65,
+                label="honest",
+                color="#4e79a7",
+            )
+        if deceptive:
+            ax.scatter(
+                [point["x"] for point in deceptive],
+                [point["y"] for point in deceptive],
+                s=18,
+                alpha=0.65,
+                label="deceptive",
+                color="#e15759",
+            )
+        method = payload.get("method", "projection")
+        ax.set_title(f"{payload.get('layer_label', layer_name)} ({method})")
+        ax.set_xlabel("component_1")
+        ax.set_ylabel("component_2")
+        ax.grid(alpha=0.2)
+        ax.legend(loc="best", fontsize=8)
+
+    for index in range(len(items), rows * cols):
+        axes[index // cols, index % cols].axis("off")
+
+    fig.savefig(output_path, dpi=160)
+    plt.close(fig)
+
+
+def build_probe_roc_curve(roc_curves, output_path: Path):
+    if not roc_curves:
+        _save_placeholder_chart(
+            output_path,
+            "Probe ROC Curve",
+            "No probe validation scores were available.",
+        )
+        return
+
+    fig, ax = plt.subplots(figsize=(10, 7), constrained_layout=True)
+    ax.plot([0, 1], [0, 1], linestyle="--", linewidth=1, color="#888888", label="random")
+
+    has_curve = False
+    for layer_name, payload in roc_curves.items():
+        fpr = payload.get("fpr", [])
+        tpr = payload.get("tpr", [])
+        if not fpr or not tpr:
+            continue
+        has_curve = True
+        auc = float(payload.get("auc", 0.0))
+        label = f"{payload.get('layer_label', layer_name)} (AUC={auc:.3f})"
+        ax.plot(fpr, tpr, linewidth=2, label=label)
+
+    if not has_curve:
+        plt.close(fig)
+        _save_placeholder_chart(
+            output_path,
+            "Probe ROC Curve",
+            "ROC inputs were present but empty.",
+        )
+        return
+
+    ax.set_title("Probe ROC Curves")
+    ax.set_xlabel("false_positive_rate")
+    ax.set_ylabel("true_positive_rate")
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, 1.05)
+    ax.grid(alpha=0.25)
+    ax.legend(loc="lower right", fontsize=8)
+    fig.savefig(output_path, dpi=160)
+    plt.close(fig)
+
+
+def build_category_breakdown_heatmap(categories, column_labels, values, output_path: Path):
+    if not categories or values is None or np.size(values) == 0:
+        _save_placeholder_chart(
+            output_path,
+            "Category Breakdown",
+            "No category-level detection data was available.",
+        )
+        return
+
+    matrix = np.asarray(values, dtype=np.float32)
+    fig, ax = plt.subplots(figsize=(12, max(4, len(categories) * 0.8)), constrained_layout=True)
+    image = ax.imshow(matrix, aspect="auto", cmap="YlOrRd", vmin=0.0, vmax=1.0)
+    ax.set_title("Category-Level Detection Rate")
+    ax.set_xlabel("layer")
+    ax.set_ylabel("category")
+    ax.set_xticks(range(len(column_labels)))
+    ax.set_xticklabels(column_labels, rotation=35, ha="right")
+    ax.set_yticks(range(len(categories)))
+    ax.set_yticklabels(categories)
+
+    for i in range(matrix.shape[0]):
+        for j in range(matrix.shape[1]):
+            value = float(matrix[i, j])
+            text_color = "white" if value >= 0.55 else "black"
+            ax.text(j, i, f"{value:.0%}", ha="center", va="center", fontsize=8, color=text_color)
+
+    fig.colorbar(image, ax=ax, label="detection_rate")
+    fig.savefig(output_path, dpi=160)
+    plt.close(fig)
+
+
+def build_adversarial_analysis_chart(summary, output_path: Path):
+    if not summary:
+        _save_placeholder_chart(
+            output_path,
+            "Adversarial Analysis",
+            "No adversarial summary was available.",
+        )
+        return
+
+    by_category = summary.get("by_category", {}) or {}
+    by_difficulty = summary.get("by_difficulty", {}) or {}
+    total_missed = int(summary.get("total_missed", 0) or 0)
+
+    if total_missed <= 0 and not by_category and not by_difficulty:
+        _save_placeholder_chart(
+            output_path,
+            "Adversarial Analysis",
+            "No missed deceptive samples were recorded.",
+        )
+        return
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5), constrained_layout=True)
+
+    if by_category:
+        axes[0].bar(list(by_category.keys()), list(by_category.values()), color="#e15759", alpha=0.9)
+        axes[0].tick_params(axis="x", rotation=35)
+        axes[0].set_title("Missed Samples by Category")
+        axes[0].set_ylabel("missed_count")
+        axes[0].grid(axis="y", alpha=0.25)
+    else:
+        axes[0].axis("off")
+        axes[0].text(0.5, 0.5, "No category failures.", ha="center", va="center")
+
+    if by_difficulty:
+        axes[1].bar(list(by_difficulty.keys()), list(by_difficulty.values()), color="#4e79a7", alpha=0.9)
+        axes[1].set_title("Missed Samples by Difficulty")
+        axes[1].set_ylabel("missed_count")
+        axes[1].grid(axis="y", alpha=0.25)
+    else:
+        axes[1].axis("off")
+        axes[1].text(0.5, 0.5, "No difficulty failures.", ha="center", va="center")
+
+    fig.savefig(output_path, dpi=160)
+    plt.close(fig)
+
+
 def _resolve_targets(config):
     return resolve_requested_targets(config)
 

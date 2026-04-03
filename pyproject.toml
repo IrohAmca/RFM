@@ -17,6 +17,7 @@ dependencies = [
     "streamlit>=1.55.0",
     "plotly>=6.6.0",
     "scipy>=1.15.3",
+    "scikit-learn>=1.7.2",
 ]
 
 [project.optional-dependencies]

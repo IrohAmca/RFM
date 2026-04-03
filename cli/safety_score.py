@@ -10,7 +10,7 @@ from pathlib import Path
 import torch
 
 from rfm.config import ConfigManager
-from rfm.layout import resolve_activations_dir, resolve_best_checkpoint, resolve_requested_targets
+from rfm.layout import default_safety_scores_dir, resolve_activations_dir, resolve_best_checkpoint, resolve_requested_targets
 from rfm.sae.model import load_sae_checkpoint
 from rfm.safety.contrastive import ContrastiveScorer
 
@@ -43,10 +43,17 @@ def _contrastive_labels(config):
     return positive_label or "toxic", negative_label or "safe"
 
 
+def _resolve_safety_output_dir(config, target: str | None, output_base: str | None) -> Path:
+    if output_base:
+        return Path(output_base)
+    return Path(default_safety_scores_dir(config, target=target))
+
+
 def cmd_contrastive(config, targets, top_k, output_base):
     device = config.get("train.device", "cuda" if torch.cuda.is_available() else "cpu")
     positive_label, negative_label = _contrastive_labels(config)
     all_layer_results = {}
+    summary_output_dir = None
 
     for target in targets:
         target_config = config.for_target(target) if hasattr(config, "for_target") else config
@@ -78,10 +85,11 @@ def cmd_contrastive(config, targets, top_k, output_base):
             logger.error("Scoring failed for %s: %s", target, exc)
             continue
 
-        output_dir = Path(output_base) if output_base else Path(chunk_dir).parent / "safety_scores"
+        output_dir = _resolve_safety_output_dir(config, target, output_base)
         output_dir.mkdir(parents=True, exist_ok=True)
         csv_path = output_dir / f"{target.replace('.', '_')}_contrastive.csv"
         scorer.save_scores(scores, csv_path)
+        summary_output_dir = output_dir
 
         top_dangerous = scorer.top_dangerous(scores, top_k=top_k, direction=positive_label)
         all_layer_results[target] = top_dangerous
@@ -101,8 +109,8 @@ def cmd_contrastive(config, targets, top_k, output_base):
                 f"{row['risk_score']:>8.2f}"
             )
 
-    if all_layer_results:
-        summary_path = (Path(output_base) if output_base else Path("safety_scores")) / "contrastive_summary.json"
+    if all_layer_results and summary_output_dir is not None:
+        summary_path = summary_output_dir / "contrastive_summary.json"
         summary_path.parent.mkdir(parents=True, exist_ok=True)
         summary = {
             target: [
@@ -157,7 +165,7 @@ def cmd_cross_layer(config, targets, top_k, output_base):
         device=device,
     )
 
-    output_dir = Path(output_base) if output_base else Path("safety_scores")
+    output_dir = _resolve_safety_output_dir(config, available_targets[0], output_base)
     contrastive_features = {}
     for target in available_targets:
         csv_path = output_dir / f"{target.replace('.', '_')}_contrastive.csv"

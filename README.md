@@ -4,6 +4,7 @@ Research pipeline for analyzing and steering LLM internal representations using 
 
 - **General Analysis**: Extract layer activations, train SAEs, map features, run auto-interpretation and steering experiments.
 - **Safety Analysis**: Identify and suppress features that cause harmful model outputs using generation-time contrastive analysis.
+- **Deception Analysis**: Learn honest vs deceptive directions, probes, monitors, and static reports from paired scenario activations.
 
 ## Setup
 
@@ -57,6 +58,12 @@ configs/models/         # Per-model JSON config files
 runs/<model>/           # Model outputs (activations, checkpoints, reports)
 tests/                  # Unit tests
 ```
+
+Deception-specific entry points added on top of the general pipeline:
+
+- `cli.deception_cycle` for direction -> probe -> monitor -> adversarial runs
+- `cli.deception_report` for static HTML + PNG reporting
+- `cli.deception_autointerp` for LLM interpretations of top deception-correlated features
 
 ---
 
@@ -126,7 +133,9 @@ python -m cli.safety_score \
   --top-k 50
 ```
 
-Output: `safety_scores/<layer>_contrastive.csv`
+Output: `<activations_parent>/safety_scores/<layer>_contrastive.csv`
+
+Also writes `contrastive_summary.json` in the same `safety_scores/` directory.
 
 ### Phase 4 — Cross-Layer Feature Combination Analysis
 
@@ -148,7 +157,7 @@ python -m cli.safety_score \
   --top-k 50
 ```
 
-Output: `safety_scores/cross_layer_combinations.csv`, `safety_classifier_report.json`, `feature_importance.json`
+Output: `safety_scores/cross_layer_combinations.csv`, `safety_scores/safety_classifier_report.json`, `safety_scores/feature_importance.json`
 
 > **Note**: Cross-layer analysis requires contrastive scoring to be run first.
 
@@ -225,6 +234,116 @@ python -m cli.steer steer \
     "max_new_tokens": 256
   }
 }
+```
+
+---
+
+## Deception Pipeline (Qwen3-0.6B)
+
+The deception workflow uses paired honest/deceptive generations and adds reporting on top of direction, probe, and monitor artifacts.
+
+### Phase 1 - Direction / Probe / Monitor / Adversarial
+
+```bash
+# Run individual phases against existing deception activations + SAE checkpoints
+python -m cli.deception_cycle --config configs/models/qwen3-0.6B.deception.json --phase direction
+python -m cli.deception_cycle --config configs/models/qwen3-0.6B.deception.json --phase probe
+python -m cli.deception_cycle --config configs/models/qwen3-0.6B.deception.json --phase monitor
+python -m cli.deception_cycle --config configs/models/qwen3-0.6B.deception.json --phase adversarial
+
+# Or run the full deception pipeline
+python -m cli.deception_cycle --config configs/models/qwen3-0.6B.deception.json --phase full
+```
+
+Key artifacts:
+
+- `runs/Qwen_Qwen3-0.6B/deception/directions/directions.pt`
+- `runs/Qwen_Qwen3-0.6B/deception/probes/probe_summary.json`
+- `runs/Qwen_Qwen3-0.6B/deception/monitor/monitor_report.json`
+- `runs/Qwen_Qwen3-0.6B/deception/adversarial/summary.json`
+
+### Phase 2 - Feature-Level Scoring and Reporting
+
+Generate contrastive deception feature scores:
+
+```bash
+python -m cli.safety_score \
+  --config configs/models/qwen3-0.6B.deception.json \
+  --mode contrastive
+
+python -m cli.safety_score \
+  --config configs/models/qwen3-0.6B.deception.json \
+  --mode cross-layer
+```
+
+Default output directory for deception scoring:
+
+- `runs/Qwen_Qwen3-0.6B/deception/contextual_activations/safety_scores/`
+
+Generate the static deception report:
+
+```bash
+python -m cli.deception_report \
+  --config configs/models/qwen3-0.6B.deception.json
+```
+
+Static report outputs:
+
+- `runs/Qwen_Qwen3-0.6B/deception/reports/deception_report.html`
+- `runs/Qwen_Qwen3-0.6B/deception/reports/layer_comparison.png`
+- `runs/Qwen_Qwen3-0.6B/deception/reports/tsne_honest_vs_deceptive.png`
+- `runs/Qwen_Qwen3-0.6B/deception/reports/probe_roc_curve.png`
+- `runs/Qwen_Qwen3-0.6B/deception/reports/category_breakdown.png`
+- `runs/Qwen_Qwen3-0.6B/deception/reports/adversarial_analysis.png`
+
+Optional: add LLM interpretations for top deception-correlated SAE features:
+
+```bash
+# OpenAI
+set OPENAI_API_KEY=your_key
+python -m cli.deception_autointerp \
+  --config configs/models/qwen3-0.6B.deception.json \
+  --top-n 20
+
+# Groq
+set GROQ_API_KEY=your_key
+python -m cli.deception_autointerp \
+  --config configs/models/qwen3-0.6B.deception.json \
+  --top-n 20 \
+  --groq \
+  --model llama-3.1-8b-instant
+```
+
+### Dashboard
+
+The Streamlit dashboard includes a deception monitor view and automatically surfaces generated report artifacts when present.
+
+```bash
+uv run streamlit run rfm/dashboard/app.py
+```
+
+Set the sidebar config path to:
+
+- `configs/models/qwen3-0.6B.deception.json`
+
+### Reporting Command Summary
+
+```bash
+# 1) Produce deception monitor artifacts
+python -m cli.deception_cycle --config configs/models/qwen3-0.6B.deception.json --phase direction
+python -m cli.deception_cycle --config configs/models/qwen3-0.6B.deception.json --phase probe
+python -m cli.deception_cycle --config configs/models/qwen3-0.6B.deception.json --phase monitor
+python -m cli.deception_cycle --config configs/models/qwen3-0.6B.deception.json --phase adversarial
+
+# 2) Score SAE features for deceptive vs honest behavior
+python -m cli.safety_score --config configs/models/qwen3-0.6B.deception.json --mode contrastive
+python -m cli.safety_score --config configs/models/qwen3-0.6B.deception.json --mode cross-layer
+
+# 3) Build the static report
+python -m cli.deception_report --config configs/models/qwen3-0.6B.deception.json
+
+# 4) Open the dashboard
+uv run streamlit run rfm/dashboard/app.py
 ```
 
 ---

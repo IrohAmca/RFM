@@ -16,8 +16,10 @@ if __package__ in {None, ""}:
         sys.path.insert(0, str(project_root))
 
 from rfm.config import ConfigManager
+from rfm.deception.reporting import deception_report_paths
 from rfm.deception.utils import deception_run_dir
 from rfm.layout import (
+    default_safety_scores_dir,
     default_checkpoint_path,
     default_feature_mapping_dir,
     model_slug,
@@ -139,6 +141,15 @@ def load_deception_adversarial(deception_dir: str):
     summary = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else None
     missed = json.loads(missed_path.read_text(encoding="utf-8")) if missed_path.exists() else []
     return summary, missed
+
+
+@st.cache_data
+def load_deception_report_assets(deception_dir: str):
+    paths = deception_report_paths(Path(deception_dir) / "reports")
+    return {
+        key: str(value)
+        for key, value in paths.items()
+    }
 
 
 @st.cache_data
@@ -384,12 +395,12 @@ def render_cross_layer_view():
 # Deception Monitor Views
 # ==========================================
 
-def render_deception_monitor(config):
+def render_deception_monitor(config, config_path=None):
     st.header("🕵️ Deception Monitor")
 
     dec_dir = str(deception_run_dir(config))
-    safety_scores_dir = str(Path(dec_dir) / "contextual_activations" / "safety_scores")
     targets = resolve_requested_targets(config)
+    safety_scores_dir = str(default_safety_scores_dir(config, target=targets[0])) if targets else ""
 
     # ── Section 1: Monitor Health KPIs ──────────────────────────────────
     report = load_deception_monitor_report(dec_dir)
@@ -579,6 +590,43 @@ def render_deception_monitor(config):
     else:
         st.info("Run adversarial phase: `python -m cli.deception_cycle --phase adversarial`")
 
+    st.divider()
+
+    st.subheader("Generated Report Artifacts")
+    report_assets = load_deception_report_assets(dec_dir)
+    html_path = Path(report_assets["html"])
+    if html_path.exists():
+        st.success(f"HTML report ready: `{html_path}`")
+        st.caption(f"Report directory: `{report_assets['report_dir']}`")
+        st.download_button(
+            label="Download deception_report.html",
+            data=html_path.read_bytes(),
+            file_name="deception_report.html",
+            mime="text/html",
+            key="download_deception_report",
+        )
+    else:
+        cmd = "python -m cli.deception_report --config ..."
+        if config_path:
+            cmd = f"python -m cli.deception_report --config {config_path}"
+        st.info(f"Generate the full report with: `{cmd}`")
+
+    chart_specs = [
+        ("Layer Comparison", report_assets["layer_comparison"]),
+        ("Honest vs Deceptive Projection", report_assets["tsne"]),
+        ("Probe ROC", report_assets["roc"]),
+        ("Category Breakdown", report_assets["category"]),
+        ("Adversarial Analysis", report_assets["adversarial"]),
+    ]
+    existing_specs = [(label, path) for label, path in chart_specs if Path(path).exists()]
+    if existing_specs:
+        cols = st.columns(2)
+        for index, (label, path) in enumerate(existing_specs):
+            with cols[index % 2]:
+                st.image(path, caption=label, use_container_width=True)
+    else:
+        st.caption("No report charts found yet.")
+
 
 def _pipeline_status(dec_dir: str, config=None) -> dict:
     base = Path(dec_dir)
@@ -749,7 +797,7 @@ def main():
     page = st.sidebar.radio("Navigation", pages)
 
     if page == "🕵️ Deception Monitor":
-        render_deception_monitor(config)
+        render_deception_monitor(config, config_path)
     elif page == "🔍 Feature Explorer":
         render_feature_explorer(config, slug, mapping_dir)
     elif page == "📈 Training Metrics":

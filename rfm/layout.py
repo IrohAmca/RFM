@@ -138,6 +138,11 @@ def resolve_activations_dir(config, target=None) -> str:
     return str(path)
 
 
+def default_safety_scores_dir(config, target=None) -> str:
+    activation_dir = Path(resolve_activations_dir(config, target=target))
+    return str(activation_dir.parent / "safety_scores")
+
+
 def default_checkpoint_path(config, target=None) -> str:
     base = Path("runs") / model_slug(config) / "checkpoints"
     if target and _is_multi_layer(config):

@@ -29,7 +29,13 @@ from pathlib import Path
 from rfm.config import ConfigManager
 from rfm.deception.deception_autointerp import DeceptionFeatureAutoInterp
 from rfm.deception.utils import deception_run_dir
-from rfm.layout import resolve_activations_dir, resolve_best_checkpoint, resolve_requested_targets, sanitize_layer_name
+from rfm.layout import (
+    default_safety_scores_dir,
+    resolve_activations_dir,
+    resolve_best_checkpoint,
+    resolve_requested_targets,
+    sanitize_layer_name,
+)
 from rfm.sae.model import load_sae_checkpoint
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
@@ -66,6 +72,29 @@ def parse_args():
         help="Seconds between LLM requests (rate-limit guard).",
     )
     parser.add_argument(
+        "--model",
+        type=str,
+        default="gpt-4o-mini",
+        help="LLM model to use for interpretation.",
+    )
+    parser.add_argument(
+        "--api-key",
+        type=str,
+        default=None,
+        help="Optional API key override. Otherwise read from env vars.",
+    )
+    parser.add_argument(
+        "--base-url",
+        type=str,
+        default=None,
+        help="Base URL for an OpenAI-compatible API.",
+    )
+    parser.add_argument(
+        "--groq",
+        action="store_true",
+        help="Use Groq's OpenAI-compatible endpoint and GROQ_API_KEY.",
+    )
+    parser.add_argument(
         "--no-resume",
         action="store_true",
         help="Ignore existing partial results and re-interpret from scratch.",
@@ -75,6 +104,8 @@ def parse_args():
 
 def _resolve_api_key(args) -> str:
     """Read API key from env vars — matches the pattern used in cli/analyze.py."""
+    if args.api_key:
+        return args.api_key
     if args.groq:
         key = os.environ.get("GROQ_API_KEY", "")
         if key:
@@ -121,9 +152,7 @@ def _output_path(config, target: str) -> Path:
 
 def _safety_scores_dir(config, target: str) -> Path:
     """Locate the contrastive CSV directory for a given layer."""
-    target_config = config.for_target(target) if hasattr(config, "for_target") else config
-    chunk_dir = Path(resolve_activations_dir(target_config, target=target))
-    return chunk_dir.parent / "safety_scores"
+    return Path(default_safety_scores_dir(config, target=target))
 
 
 def run_autointerp(config, target: str, args, api_key: str, base_url: str) -> None:

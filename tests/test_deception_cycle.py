@@ -1,6 +1,6 @@
 import torch
 
-from cli.deception_cycle import run_direction, run_extract, run_monitor, run_probe
+from cli.deception_cycle import run_direction, run_extract, run_monitor, run_phase, run_probe
 from rfm.config import ConfigManager
 
 
@@ -123,3 +123,52 @@ def test_run_extract_auto_generates_scenarios(monkeypatch):
 
     assert calls["generate"] == 1
     assert calls["extract"] == 1
+
+
+def test_run_phase_train_delegates(monkeypatch):
+    captured = {}
+
+    def _fake_run_train(config, layer_override=None):
+        captured["layer"] = layer_override
+        return {"started": True}
+
+    monkeypatch.setattr("cli.deception_cycle.run_train", _fake_run_train)
+
+    cfg = ConfigManager({"model_name": "test/model"})
+    result = run_phase(cfg, "train", "blocks.0.hook_resid_post")
+
+    assert result == {"started": True}
+    assert captured["layer"] == "blocks.0.hook_resid_post"
+
+
+def test_run_phase_full_includes_train(monkeypatch):
+    calls = []
+
+    def _recorder(name):
+        def _inner(*args, **kwargs):
+            calls.append((name, kwargs))
+            return {}
+
+        return _inner
+
+    monkeypatch.setattr("cli.deception_cycle.run_generate", _recorder("generate"))
+    monkeypatch.setattr("cli.deception_cycle.run_extract", _recorder("extract"))
+    monkeypatch.setattr("cli.deception_cycle.run_train", _recorder("train"))
+    monkeypatch.setattr("cli.deception_cycle.run_direction", _recorder("direction"))
+    monkeypatch.setattr("cli.deception_cycle.run_probe", _recorder("probe"))
+    monkeypatch.setattr("cli.deception_cycle.run_monitor", _recorder("monitor"))
+    monkeypatch.setattr("cli.deception_cycle.run_adversarial", _recorder("adversarial"))
+
+    cfg = ConfigManager({"model_name": "test/model"})
+    run_phase(cfg, "full", "blocks.0.hook_resid_post")
+
+    assert [name for name, _ in calls] == [
+        "generate",
+        "extract",
+        "train",
+        "direction",
+        "probe",
+        "monitor",
+        "adversarial",
+    ]
+    assert calls[1][1] == {"ensure_scenarios": False}

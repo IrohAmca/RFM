@@ -55,12 +55,12 @@ def _run_sweep(config):
                 model = train(config)
                 sweep_save = str(Path(save_path).parent / f"sae_topk_k_{k_val}.pt")
                 _save_model(model, config, sweep_save)
-                print(f"[sweep] Saved → {sweep_save}")
+                print(f"[sweep] Saved -> {sweep_save}")
         else:
             print(f"[train] Architecture: TopK (k={sae_section.get('topk_k', 32)})")
             model = train(config)
             _save_model(model, config, save_path)
-            print(f"[train] Saved → {save_path}")
+            print(f"[train] Saved -> {save_path}")
         return
 
     # ── Gated: single run, sparsity_weight is used but sweep is unusual ──
@@ -75,12 +75,12 @@ def _run_sweep(config):
                 model = train(config)
                 sweep_save = str(Path(save_path).parent / f"sae_lambda_{lam}.pt")
                 _save_model(model, config, sweep_save)
-                print(f"[sweep] Saved → {sweep_save}")
+                print(f"[sweep] Saved -> {sweep_save}")
         else:
             print("[train] Architecture: Gated")
             model = train(config)
             _save_model(model, config, save_path)
-            print(f"[train] Saved → {save_path}")
+            print(f"[train] Saved -> {save_path}")
         return
 
     # ── Vanilla: sweep over sparsity_weight (lambda) ──
@@ -94,11 +94,11 @@ def _run_sweep(config):
             model = train(config)
             sweep_save = str(Path(save_path).parent / f"sae_lambda_{lam}.pt")
             _save_model(model, config, sweep_save)
-            print(f"[sweep] Saved → {sweep_save}")
+            print(f"[sweep] Saved -> {sweep_save}")
     else:
         model = train(config)
         _save_model(model, config, save_path)
-        print(f"[train] Saved → {save_path}")
+        print(f"[train] Saved -> {save_path}")
 
 
 def _resolve_targets(config, layer=None):
@@ -107,31 +107,35 @@ def _resolve_targets(config, layer=None):
     return resolve_requested_targets(config)
 
 
-def main():
-    args = parse_args()
-    base_config = ConfigManager.from_file(args.config)
-    targets = _resolve_targets(base_config, layer=args.layer)
-    
+def run_training(base_config, layer=None):
+    targets = _resolve_targets(base_config, layer=layer)
+
     for target in targets:
         print(f"\n{'#'*60}")
         print(f"[train] Starting SAE training for target: {target}")
         print(f"{'#'*60}")
-        
+
         config = base_config.for_target(target)
-        
+
         # Resolve target-specific paths using base_config so multi-layer status is preserved
         act_dir = resolve_activations_dir(config, target=target)
         pt_files = sorted(Path(act_dir).glob("*.pt"))
         if not pt_files:
             raise FileNotFoundError(f"No activation files found in {act_dir}")
         config.set("datasets.path", [str(p) for p in pt_files])
-        
+
         save_path = config.get("train.save_path")
         if not save_path:
             save_path = resolve_checkpoint_path(config, target=target)
         config.set("train.save_path", save_path)
-        
+
         _run_sweep(config)
+
+
+def main():
+    args = parse_args()
+    base_config = ConfigManager.from_file(args.config)
+    run_training(base_config, layer=args.layer)
 
 
 if __name__ == "__main__":

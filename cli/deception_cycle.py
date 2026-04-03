@@ -7,6 +7,7 @@ from pathlib import Path
 import torch
 
 from cli.extract_deception import extract_all_targets
+from cli.train import run_training
 from rfm.config import ConfigManager
 from rfm.deception import (
     AdversarialSearch,
@@ -34,7 +35,7 @@ def parse_args():
     parser.add_argument(
         "--phase",
         default="full",
-        choices=["full", "generate", "extract", "direction", "probe", "monitor", "adversarial"],
+        choices=["full", "generate", "extract", "train", "direction", "probe", "monitor", "adversarial"],
         help="Which phase to run.",
     )
     parser.add_argument("--cycle", type=int, default=1, help="Number of iterations to run.")
@@ -104,6 +105,10 @@ def run_extract(
     dataset = DeceptionDataset(config=config, mode="paired")
     dataset.load()
     extract_all_targets(_targets(config, layer_override), extractor, dataset, config)
+
+
+def run_train(config, layer_override: str | None = None) -> None:
+    run_training(config, layer=layer_override)
 
 
 def run_direction(config, layer_override: str | None = None) -> dict[str, DirectionResult]:
@@ -357,6 +362,8 @@ def run_phase(config, phase: str, layer_override: str | None = None):
         return run_generate(config)
     if phase == "extract":
         return run_extract(config, layer_override, ensure_scenarios=True)
+    if phase == "train":
+        return run_train(config, layer_override)
     if phase == "direction":
         return run_direction(config, layer_override)
     if phase == "probe":
@@ -368,6 +375,7 @@ def run_phase(config, phase: str, layer_override: str | None = None):
 
     run_generate(config)
     run_extract(config, layer_override, ensure_scenarios=False)
+    run_train(config, layer_override)
     run_direction(config, layer_override)
     run_probe(config, layer_override)
     run_monitor(config, layer_override)

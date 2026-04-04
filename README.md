@@ -120,22 +120,25 @@ Identifies which SAE features are most associated with toxic generation.
 | `risk_score` | Combined: log(rate_ratio) × √fisher |
 
 ```bash
-python -m cli.safety_score \
+python -m cli.pattern_score \
   --config configs/models/qwen3-0.6B.safety-gen.json \
-  --mode contrastive \
+  --mode feature-score \
   --top-k 50
 
 # Single layer scoring
-python -m cli.safety_score \
+python -m cli.pattern_score \
   --config configs/models/qwen3-0.6B.safety-gen.json \
-  --mode contrastive \
+  --mode feature-score \
   --layer blocks.6.hook_resid_post \
   --top-k 50
 ```
 
-Output: `<activations_parent>/safety_scores/<layer>_contrastive.csv`
+Canonical outputs:
 
-Also writes `contrastive_summary.json` in the same `safety_scores/` directory.
+- `runs/Qwen_Qwen3-0.6B/contrast_axis/patterns/pattern_bundle.pt`
+- `runs/Qwen_Qwen3-0.6B/contrast_axis/patterns/pattern_report.json`
+
+`cli.safety_score` remains as a backwards-compatible alias.
 
 ### Phase 4 — Cross-Layer Feature Combination Analysis
 
@@ -151,13 +154,18 @@ Uses:
 3. **Feature importance ranking**: identifies the most predictive individual features.
 
 ```bash
-python -m cli.safety_score \
+python -m cli.pattern_score \
   --config configs/models/qwen3-0.6B.safety-gen.json \
   --mode cross-layer \
   --top-k 50
 ```
 
-Output: `safety_scores/cross_layer_combinations.csv`, `safety_scores/safety_classifier_report.json`, `safety_scores/feature_importance.json`
+Cross-layer outputs are written back into the same canonical pattern bundle/report pair under:
+
+- `analysis.motif_candidates`
+- `analysis.stable_motifs`
+- `analysis.feature_importance`
+- `analysis.causal_validation`
 
 > **Note**: Cross-layer analysis requires contrastive scoring to be run first.
 
@@ -267,18 +275,19 @@ Key artifacts:
 Generate contrastive deception feature scores:
 
 ```bash
-python -m cli.safety_score \
+python -m cli.pattern_score \
   --config configs/models/qwen3-0.6B.deception.json \
-  --mode contrastive
+  --mode feature-score
 
-python -m cli.safety_score \
+python -m cli.pattern_score \
   --config configs/models/qwen3-0.6B.deception.json \
   --mode cross-layer
 ```
 
-Default output directory for deception scoring:
+Canonical deception pattern artifacts:
 
-- `runs/Qwen_Qwen3-0.6B/deception/contextual_activations/safety_scores/`
+- `runs/Qwen_Qwen3-0.6B/deception/patterns/pattern_bundle.pt`
+- `runs/Qwen_Qwen3-0.6B/deception/patterns/pattern_report.json`
 
 Generate the static deception report:
 
@@ -336,8 +345,8 @@ python -m cli.deception_cycle --config configs/models/qwen3-0.6B.deception.json 
 python -m cli.deception_cycle --config configs/models/qwen3-0.6B.deception.json --phase adversarial
 
 # 2) Score SAE features for deceptive vs honest behavior
-python -m cli.safety_score --config configs/models/qwen3-0.6B.deception.json --mode contrastive
-python -m cli.safety_score --config configs/models/qwen3-0.6B.deception.json --mode cross-layer
+python -m cli.pattern_score --config configs/models/qwen3-0.6B.deception.json --mode feature-score
+python -m cli.pattern_score --config configs/models/qwen3-0.6B.deception.json --mode cross-layer
 
 # 3) Build the static report
 python -m cli.deception_report --config configs/models/qwen3-0.6B.deception.json
@@ -458,7 +467,7 @@ python -m cli.train --config configs/models/qwen3-0.6B.safety-gen.json --layer b
 python -m cli.train --config configs/models/qwen3-0.6B.safety-gen.json --layer blocks.27.hook_resid_post
 
 # Step 3: Score layers individually
-python -m cli.safety_score --config configs/models/qwen3-0.6B.safety-gen.json --layer blocks.6.hook_resid_post
+python -m cli.pattern_score --config configs/models/qwen3-0.6B.safety-gen.json --mode feature-score --layer blocks.6.hook_resid_post
 ```
 
 ### Device Resolution

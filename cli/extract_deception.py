@@ -14,6 +14,7 @@ from rfm.deception import DeceptionDataset
 from rfm.deception.utils import format_chat_prompt
 from rfm.extractors.hf_generate import HFGenerationExtractor
 from rfm.layout import resolve_activations_dir, resolve_requested_targets, sanitize_model_name
+from rfm.patterns import ContrastAxisSpec
 
 
 def resolve_dtype(name):
@@ -58,6 +59,7 @@ def _chunk_metadata(
     buffer_responses,
     buffer_sources,
     extraction_mode,
+    axis_spec,
 ):
     return {
         "model_name": model_name,
@@ -73,6 +75,7 @@ def _chunk_metadata(
         "sources": list(buffer_sources),
         "extraction_mode": extraction_mode,
         "extraction_timestamp": time.time(),
+        "contrast_axis": axis_spec.to_dict(),
     }
 
 
@@ -133,6 +136,7 @@ def flush_chunk(
     output_dir,
     output_prefix,
     extraction_mode,
+    axis_spec,
 ):
     if not buffer_acts:
         return False
@@ -152,6 +156,7 @@ def flush_chunk(
         buffer_responses=buffer_responses,
         buffer_sources=buffer_sources,
         extraction_mode=extraction_mode,
+        axis_spec=axis_spec,
     )
     save_path, meta_path, temp_path, temp_meta_path = _chunk_paths(
         output_dir,
@@ -194,6 +199,7 @@ def flush_all_targets(
     output_dirs,
     output_prefix,
     extraction_mode,
+    axis_spec,
 ):
     flushed = False
     for target in targets:
@@ -216,6 +222,7 @@ def flush_all_targets(
                 output_dirs[target],
                 output_prefix,
                 extraction_mode,
+                axis_spec,
             )
             or flushed
         )
@@ -227,6 +234,7 @@ def _decode_response(extractor: HFGenerationExtractor, token_tensor: torch.Tenso
 
 
 def extract_all_targets(targets, extractor, dataset, config):
+    axis = ContrastAxisSpec.from_config(config)
     extraction_cfg = config.get("deception.extraction", {})
     chunk_size = int(config.get("extraction.chunk_size", 500_000))
     output_prefix = extraction_cfg.get("output_prefix", config.get("extraction.output_prefix", "deception_activations"))
@@ -352,8 +360,8 @@ def extract_all_targets(targets, extractor, dataset, config):
         for target in targets:
             buf = buffers[target]
             for label, response_text, result in (
-                ("honest", honest_response, honest_result[target]),
-                ("deceptive", deceptive_response, deceptive_result[target]),
+                (axis.endpoint_a, honest_response, honest_result[target]),
+                (axis.endpoint_b, deceptive_response, deceptive_result[target]),
             ):
                 acts = result["activations"].to(activation_dtype).cpu()
                 tokens = result["tokens"].cpu()
@@ -378,6 +386,7 @@ def extract_all_targets(targets, extractor, dataset, config):
                 output_dirs,
                 output_prefix,
                 f"deception_{mode}",
+                axis,
             )
 
     next_chunk_index = flush_all_targets(
@@ -388,6 +397,7 @@ def extract_all_targets(targets, extractor, dataset, config):
         output_dirs,
         output_prefix,
         f"deception_{mode}",
+        axis,
     )
     for target in targets:
         print(f"[extract_deception] Complete: {target} -> {output_dirs[target]}")

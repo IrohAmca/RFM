@@ -10,6 +10,7 @@ Uses scikit-learn DecisionTreeClassifier for interpretable rules.
 from __future__ import annotations
 
 import logging
+import warnings
 from pathlib import Path
 
 import torch
@@ -19,7 +20,7 @@ logger = logging.getLogger("rfm.safety.cross_layer")
 
 
 class CrossLayerAnalyzer:
-    """Detect cross-layer feature combinations associated with toxic output."""
+    """Deprecated compatibility wrapper for the old safety-specific cross-layer analyzer."""
 
     def __init__(self, sae_models: dict[str, torch.nn.Module], device: str = "cuda"):
         """
@@ -27,6 +28,12 @@ class CrossLayerAnalyzer:
             sae_models: dict mapping target_name → trained SAE model
             device:     torch device
         """
+        warnings.warn(
+            "rfm.safety.cross_layer.CrossLayerAnalyzer is deprecated. "
+            "Use cli.pattern_score and the canonical pattern bundle/report flow instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.sae_models = sae_models
         self.device = device
         for m in sae_models.values():

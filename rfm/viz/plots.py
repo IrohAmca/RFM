@@ -488,7 +488,7 @@ def build_deception_tsne_scatter(tsne_payloads, output_path: Path):
     if not tsne_payloads:
         _save_placeholder_chart(
             output_path,
-            "Honest vs Deceptive Projection",
+            "Activation Projection",
             "No activation projection data was available.",
         )
         return
@@ -508,25 +508,23 @@ def build_deception_tsne_scatter(tsne_payloads, output_path: Path):
             ax.text(0.5, 0.5, "No points available", ha="center", va="center")
             continue
 
-        honest = [point for point in points if point.get("label") == "honest"]
-        deceptive = [point for point in points if point.get("label") == "deceptive"]
-        if honest:
+        palette = ["#4e79a7", "#e15759", "#59a14f", "#f28e2b", "#af7aa1"]
+        labels = []
+        for point in points:
+            label = str(point.get("label", "unknown"))
+            if label not in labels:
+                labels.append(label)
+        for label_index, label in enumerate(labels):
+            group = [point for point in points if point.get("label") == label]
+            if not group:
+                continue
             ax.scatter(
-                [point["x"] for point in honest],
-                [point["y"] for point in honest],
+                [point["x"] for point in group],
+                [point["y"] for point in group],
                 s=18,
                 alpha=0.65,
-                label="honest",
-                color="#4e79a7",
-            )
-        if deceptive:
-            ax.scatter(
-                [point["x"] for point in deceptive],
-                [point["y"] for point in deceptive],
-                s=18,
-                alpha=0.65,
-                label="deceptive",
-                color="#e15759",
+                label=label,
+                color=palette[label_index % len(palette)],
             )
         method = payload.get("method", "projection")
         ax.set_title(f"{payload.get('layer_label', layer_name)} ({method})")

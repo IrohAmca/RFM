@@ -1,5 +1,18 @@
 {
   "model_name": "Qwen/Qwen3-0.6B",
+  "contrast_axis": {
+    "id": "deception",
+    "endpoint_a": "honest",
+    "endpoint_b": "deceptive",
+    "display_name_a": "Honest",
+    "display_name_b": "Deceptive",
+    "orientation": "b_minus_a",
+    "pair_key_fields": [
+      "pair_id",
+      "label",
+      "question"
+    ]
+  },
   "dataloader": {
     "dataset_name": "deception_scenarios",
     "text_field": "question",
@@ -105,5 +118,32 @@
     "validation_split": 0.1,
     "split_seed": 42,
     "feature_activity_threshold": 0.001
+  },
+  "patterns": {
+    "aggregation_candidates": [
+      "mean",
+      "topk_mean_4",
+      "lastk_mean_8",
+      "max"
+    ],
+    "cv_folds": 5,
+    "feature_pool": {
+      "endpoint_a": 12,
+      "endpoint_b": 12,
+      "interaction": 8
+    },
+    "stability_min_fraction": 0.6,
+    "max_tree_depth": 5,
+    "min_interaction_gain": 0.005,
+    "intervention_min_shift": 0.01,
+    "causal_intervention": {
+      "local_files_only": true,
+      "max_prompts": 2,
+      "max_new_tokens": 48,
+      "temperature": 0.0,
+      "top_p": 1.0,
+      "amplify_alpha": 5.0,
+      "min_effect": 0.01
+    }
   }
 }

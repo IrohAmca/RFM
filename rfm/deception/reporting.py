@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import csv
 import html
 import json
 import re
@@ -15,7 +14,8 @@ from rfm.deception.deception_monitor import DeceptionMonitor
 from rfm.deception.deception_probe import DeceptionProbe
 from rfm.deception.direction_finder import DeceptionDirectionFinder, DirectionResult
 from rfm.deception.utils import deception_run_dir
-from rfm.layout import default_safety_scores_dir, model_slug, resolve_activations_dir, resolve_requested_targets, sanitize_layer_name
+from rfm.layout import resolve_activations_dir, resolve_requested_targets, sanitize_layer_name
+from rfm.patterns import AxisProbeState, ContrastAxisSpec, load_pattern_bundle, pattern_artifact_paths
 from rfm.viz.plots import (
     build_adversarial_analysis_chart,
     build_category_breakdown_heatmap,
@@ -53,14 +53,6 @@ def _read_json(path: Path, default):
     if not path.exists():
         return default
     return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _read_csv_rows(path: Path | None) -> list[dict]:
-    if path is None or not path.exists():
-        return []
-    with path.open("r", newline="", encoding="utf-8") as handle:
-        return list(csv.DictReader(handle))
-
 
 def _to_float(value, default=0.0) -> float:
     try:
@@ -116,35 +108,22 @@ def _load_probe(path: Path) -> DeceptionProbe | None:
     return probe
 
 
-def _contrastive_csv_candidates(config, target: str) -> list[Path]:
-    safe = sanitize_layer_name(target)
-    slug = model_slug(config)
-    return [
-        Path(default_safety_scores_dir(config, target=target)) / f"{safe}_contrastive.csv",
-        Path("runs") / slug / "safety_scores" / f"{safe}_contrastive.csv",
-        Path("safety_scores") / f"{safe}_contrastive.csv",
-    ]
+def _directions_from_bundle(bundle_layers: dict[str, dict]) -> dict[str, DirectionResult]:
+    directions = {}
+    for layer_name, payload in bundle_layers.items():
+        direction_payload = payload.get("direction")
+        if isinstance(direction_payload, dict) and "direction" in direction_payload:
+            directions[layer_name] = DirectionResult.from_dict(direction_payload)
+    return directions
 
 
-def _contrastive_summary_candidates(config, targets: list[str]) -> list[Path]:
-    slug = model_slug(config)
-    if targets:
-        primary = Path(default_safety_scores_dir(config, target=targets[0])) / "contrastive_summary.json"
-    else:
-        primary = deception_run_dir(config, "contextual_activations", "safety_scores", "contrastive_summary.json")
-    return [
-        primary,
-        Path("runs") / slug / "safety_scores" / "contrastive_summary.json",
-        Path("safety_scores") / "contrastive_summary.json",
-    ]
-
-
-def _existing_path(candidates: list[Path]) -> Path | None:
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return None
-
+def _probe_from_bundle(payload: dict) -> DeceptionProbe | None:
+    probe_payload = payload.get("probe_state")
+    if not isinstance(probe_payload, dict) or "weight" not in probe_payload:
+        return None
+    probe = DeceptionProbe()
+    probe.state = AxisProbeState.from_dict(probe_payload)
+    return probe
 
 def _sample_projection_inputs(
     honest: torch.Tensor,
@@ -166,10 +145,17 @@ def _sample_projection_inputs(
     return honest_sel, deceptive_sel
 
 
-def _project_2d(honest: torch.Tensor, deceptive: torch.Tensor, max_points_per_label: int) -> dict:
+def _project_2d(
+    honest: torch.Tensor,
+    deceptive: torch.Tensor,
+    max_points_per_label: int,
+    *,
+    label_a: str = "honest",
+    label_b: str = "deceptive",
+) -> dict:
     honest_sel, deceptive_sel = _sample_projection_inputs(honest, deceptive, max_points_per_label=max_points_per_label)
     sample = torch.cat([honest_sel, deceptive_sel], dim=0)
-    labels = ["honest"] * honest_sel.shape[0] + ["deceptive"] * deceptive_sel.shape[0]
+    labels = [label_a] * honest_sel.shape[0] + [label_b] * deceptive_sel.shape[0]
 
     if sample.shape[0] < 2:
         points = [{"x": float(index), "y": 0.0, "label": label} for index, label in enumerate(labels)]
@@ -325,38 +311,42 @@ def _build_category_heatmap(
 
 
 def _top_risk_rows(rows: list[dict], top_k: int) -> list[dict]:
-    ordered = sorted(rows, key=lambda row: abs(_to_float(row.get("risk_score"), 0.0)), reverse=True)
+    ordered = sorted(
+        rows,
+        key=lambda row: abs(_to_float(row.get("effect_size"), _to_float(row.get("delta"), 0.0))),
+        reverse=True,
+    )
     top_rows = []
     for row in ordered[: max(int(top_k), 1)]:
         top_rows.append(
             {
                 "feature_id": _to_int(row.get("feature_id")),
-                "risk_score": _to_float(row.get("risk_score")),
-                "rate_ratio": _to_float(row.get("rate_ratio")),
-                "fisher_score": _to_float(row.get("fisher_score")),
-                "direction": row.get("direction", ""),
+                "delta": _to_float(row.get("delta")),
+                "effect_size": _to_float(row.get("effect_size")),
+                "activation_rate_a": _to_float(row.get("activation_rate_a")),
+                "activation_rate_b": _to_float(row.get("activation_rate_b")),
             }
         )
     return top_rows
 
 
-def _alignment_rows(alignment_path: Path, contrastive_rows: list[dict], top_k: int) -> list[dict]:
+def _alignment_rows(alignment_path: Path, feature_rows: list[dict], top_k: int) -> list[dict]:
     if not alignment_path.exists():
         return []
 
-    contrastive_by_feature = {_to_int(row.get("feature_id")): row for row in contrastive_rows}
+    feature_rows_by_feature = {_to_int(row.get("feature_id")): row for row in feature_rows}
     raw = _read_json(alignment_path, [])
     rows = []
     for item in raw[: max(int(top_k), 1)]:
         feature_id = _to_int(item.get("feature_id"))
-        contrastive = contrastive_by_feature.get(feature_id, {})
+        feature_row = feature_rows_by_feature.get(feature_id, {})
         rows.append(
             {
                 "feature_id": feature_id,
                 "cosine_similarity": _to_float(item.get("cosine_similarity")),
                 "alignment": item.get("alignment", ""),
-                "risk_score": _to_float(contrastive.get("risk_score")),
-                "rate_ratio": _to_float(contrastive.get("rate_ratio")),
+                "delta": _to_float(feature_row.get("delta")),
+                "effect_size": _to_float(feature_row.get("effect_size")),
             }
         )
     return rows
@@ -402,8 +392,9 @@ def _build_html_report(
     chart_paths: dict[str, Path],
     risky_features: dict[str, list[dict]],
     alignment_tables: dict[str, list[dict]],
-    contrastive_summary_path: Path | None,
+    pattern_report_path: Path | None,
 ):
+    axis = ContrastAxisSpec.from_config(config)
     ddr = _to_float(monitor_report.get("detection_rate"))
     fpr = _to_float(monitor_report.get("false_positive_rate"))
     precision = _to_float(monitor_report.get("precision"))
@@ -415,7 +406,7 @@ def _build_html_report(
     gallery = []
     for title, key in [
         ("Layer Comparison", "layer_comparison"),
-        ("Honest vs Deceptive Projection", "tsne"),
+        (f"{axis.display_name_a} vs {axis.display_name_b} Projection", "tsne"),
         ("Probe ROC", "roc"),
         ("Category Breakdown", "category"),
         ("Adversarial Analysis", "adversarial"),
@@ -432,8 +423,8 @@ def _build_html_report(
     risky_sections = []
     for layer_name, rows in risky_features.items():
         risky_sections.append(
-            f"<section class='card'><h3>{html.escape(_pretty_layer_name(layer_name))}: Top Risky Features</h3>"
-            + _table_html(rows, ["feature_id", "risk_score", "rate_ratio", "fisher_score", "direction"])
+            f"<section class='card'><h3>{html.escape(_pretty_layer_name(layer_name))}: Top Signed Features</h3>"
+            + _table_html(rows, ["feature_id", "delta", "effect_size", "activation_rate_a", "activation_rate_b"])
             + "</section>"
         )
 
@@ -441,15 +432,15 @@ def _build_html_report(
     for layer_name, rows in alignment_tables.items():
         alignment_sections.append(
             f"<section class='card'><h3>{html.escape(_pretty_layer_name(layer_name))}: SAE Direction Alignment</h3>"
-            + _table_html(rows, ["feature_id", "cosine_similarity", "alignment", "risk_score", "rate_ratio"])
+            + _table_html(rows, ["feature_id", "cosine_similarity", "alignment", "delta", "effect_size"])
             + "</section>"
         )
 
     generated_at = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
-    contrastive_note = (
-        f"<p class='muted'>Contrastive summary: {html.escape(str(contrastive_summary_path))}</p>"
-        if contrastive_summary_path
-        else "<p class='muted'>No contrastive summary JSON was found. Per-layer CSVs were used when available.</p>"
+    pattern_note = (
+        f"<p class='muted'>Pattern report: {html.escape(str(pattern_report_path))}</p>"
+        if pattern_report_path
+        else "<p class='muted'>No canonical pattern report was found.</p>"
     )
 
     return f"""<!doctype html>
@@ -532,7 +523,7 @@ def _build_html_report(
       <p>Config: <code>{html.escape(config_path)}</code></p>
       <p>Model: <code>{html.escape(str(config.get('model_name', 'unknown')))}</code></p>
       <p>Report directory: <code>{html.escape(str(report_dir))}</code></p>
-      {contrastive_note}
+      {pattern_note}
     </section>
 
     <div class="grid">
@@ -581,8 +572,8 @@ def _build_html_report(
     </div>
 
     <section class="card">
-      <h2>Contrastive Risk Tables</h2>
-      {''.join(risky_sections) if risky_sections else "<p class='muted'>No contrastive feature tables were found.</p>"}
+      <h2>Signed Feature Tables</h2>
+      {''.join(risky_sections) if risky_sections else "<p class='muted'>No feature score tables were found.</p>"}
     </section>
 
     <section class="card">
@@ -601,15 +592,25 @@ def generate_deception_report(
     top_features: int = 10,
     max_projection_points: int = 250,
 ):
+    axis = ContrastAxisSpec.from_config(config)
     targets = resolve_requested_targets(config)
     report_dir = Path(output_dir) if output_dir else deception_report_dir(config)
     report_dir.mkdir(parents=True, exist_ok=True)
 
     dec_dir = deception_run_dir(config)
-    directions = _load_directions(dec_dir / "directions" / "directions.pt")
+    pattern_paths = pattern_artifact_paths(config, axis)
+    pattern_bundle = load_pattern_bundle(config, axis)
+    bundle_layers = pattern_bundle.get("layers", {})
+    directions = _load_directions(dec_dir / "directions" / "directions.pt") or _directions_from_bundle(bundle_layers)
     probe_summary = _read_json(dec_dir / "probes" / "probe_summary.json", {})
-    monitor_report = _read_json(dec_dir / "monitor" / "monitor_report.json", {})
-    adversarial_summary = _read_json(dec_dir / "adversarial" / "summary.json", {})
+    if not probe_summary:
+        probe_summary = {
+            layer_name: dict(payload.get("probe", {}) or {})
+            for layer_name, payload in bundle_layers.items()
+            if payload.get("probe")
+        }
+    monitor_report = dict(pattern_bundle.get("monitor", {}) or {}) or _read_json(dec_dir / "monitor" / "monitor_report.json", {})
+    adversarial_summary = dict(pattern_bundle.get("adversarial", {}) or {}) or _read_json(dec_dir / "adversarial" / "summary.json", {})
     thresholds = monitor_report.get("thresholds", {})
 
     validation_split = float(config.get("deception.direction.validation_split", 0.2))
@@ -630,12 +631,11 @@ def generate_deception_report(
         safe = sanitize_layer_name(target)
         target_config = config.for_target(target) if hasattr(config, "for_target") else config
 
-        contrastive_csv_path = _existing_path(_contrastive_csv_candidates(config, target))
-        contrastive_rows = _read_csv_rows(contrastive_csv_path)
-        risky_features[target] = _top_risk_rows(contrastive_rows, top_k=top_features)
+        feature_rows = list(bundle_layers.get(target, {}).get("feature_scores", []) or [])
+        risky_features[target] = _top_risk_rows(feature_rows, top_k=top_features)
 
         alignment_path = dec_dir / "probes" / f"{safe}_sae_features.json"
-        alignment_tables[target] = _alignment_rows(alignment_path, contrastive_rows, top_k=top_features)
+        alignment_tables[target] = _alignment_rows(alignment_path, feature_rows, top_k=top_features)
 
         direction = directions.get(target)
         probe_info = probe_summary.get(target, {})
@@ -651,11 +651,11 @@ def generate_deception_report(
                 "explained_variance": float(direction.explained_variance) if direction else 0.0,
                 "threshold": threshold,
                 "top_risk_feature": top_risk.get("feature_id"),
-                "top_risk_score": top_risk.get("risk_score"),
+                "top_risk_score": top_risk.get("effect_size"),
             }
         )
 
-        probe = _load_probe(dec_dir / "probes" / f"{safe}.pt")
+        probe = _load_probe(dec_dir / "probes" / f"{safe}.pt") or _probe_from_bundle(bundle_layers.get(target, {}))
         if probe is not None:
             probes[target] = probe
 
@@ -673,6 +673,8 @@ def generate_deception_report(
                         paired["honest"],
                         paired["deceptive"],
                         max_points_per_label=max_projection_points,
+                        label_a=axis.display_name_a,
+                        label_b=axis.display_name_b,
                     ),
                 }
                 y_true, y_score = _validation_scores_for_probe(
@@ -707,7 +709,7 @@ def generate_deception_report(
     build_category_breakdown_heatmap(categories, heatmap_columns, heatmap_matrix, chart_paths["category"])
     build_adversarial_analysis_chart(adversarial_summary, chart_paths["adversarial"])
 
-    contrastive_summary_path = _existing_path(_contrastive_summary_candidates(config, targets))
+    pattern_report_path = pattern_paths["report"] if pattern_paths["report"].exists() else None
     html_text = _build_html_report(
         config_path=config_path,
         config=config,
@@ -717,7 +719,7 @@ def generate_deception_report(
         chart_paths=chart_paths,
         risky_features=risky_features,
         alignment_tables=alignment_tables,
-        contrastive_summary_path=contrastive_summary_path,
+        pattern_report_path=pattern_report_path,
     )
     chart_paths["html"].write_text(html_text, encoding="utf-8")
 

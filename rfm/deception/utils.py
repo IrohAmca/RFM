@@ -4,7 +4,9 @@ from pathlib import Path
 
 import torch
 
-from rfm.layout import model_slug
+from rfm.patterns.data import aggregate_sequence_activations as aggregate_sequence_activations_generic
+from rfm.patterns.paths import axis_run_dir
+from rfm.patterns.spec import ContrastAxisSpec
 
 
 def format_chat_prompt(
@@ -45,37 +47,20 @@ def aggregate_sequence_activations(
     method: str = "mean",
 ) -> torch.Tensor:
     """Aggregate token-level activations into one vector per sequence."""
-    if activations.ndim != 2:
-        raise ValueError(f"Expected [N_tokens, d_model] activations, got {tuple(activations.shape)}")
-
-    if method not in {"mean", "max", "last"}:
-        raise ValueError(f"Unsupported aggregation method: {method!r}")
-
-    rows = []
-    offset = 0
-    for length in token_lengths:
-        segment = activations[offset: offset + int(length)]
-        offset += int(length)
-        if segment.numel() == 0:
-            continue
-        if method == "mean":
-            rows.append(segment.mean(dim=0))
-        elif method == "max":
-            rows.append(segment.max(dim=0).values)
-        else:
-            rows.append(segment[-1])
-
-    if not rows:
-        return torch.empty(0, activations.shape[-1], dtype=activations.dtype)
-    return torch.stack(rows, dim=0)
+    return aggregate_sequence_activations_generic(activations, token_lengths, method=method)
 
 
 def deception_run_dir(config, *parts: str) -> Path:
-    base = Path("runs") / model_slug(config) / "deception"
-    for part in parts:
-        if part:
-            base = base / part
-    return base
+    axis = ContrastAxisSpec.from_config(config)
+    if axis.axis_id != "deception":
+        axis = ContrastAxisSpec(
+            axis_id="deception",
+            endpoint_a="honest",
+            endpoint_b="deceptive",
+            display_name_a="Honest",
+            display_name_b="Deceptive",
+        )
+    return axis_run_dir(config, axis, *parts)
 
 
 def sigmoid(value: float) -> float:

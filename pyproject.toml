@@ -36,3 +36,4 @@ explicit = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+addopts = "--basetemp=./.pytest_cache/pytest-tmp"

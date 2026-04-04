@@ -1,13 +1,24 @@
-import csv
 import json
 
 import torch
+from torch import nn
 
-from cli.deception_cycle import run_direction, run_monitor, run_probe
+from cli.deception_cycle import run_direction, run_monitor, run_patterns, run_probe
 from rfm.config import ConfigManager
 from rfm.deception.reporting import generate_deception_report
 from rfm.deception.utils import deception_run_dir
 from rfm.layout import sanitize_layer_name
+
+
+class IdentitySAE(nn.Module):
+    def forward(self, x):
+        return x, x
+
+    def to(self, device):
+        return self
+
+    def eval(self):
+        return self
 
 
 def _write_chunk(path, offset=0.0):
@@ -51,48 +62,10 @@ def _write_chunk(path, offset=0.0):
     )
 
 
-def _write_contrastive_csv(path):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=[
-                "feature_id",
-                "deceptive_rate",
-                "honest_rate",
-                "rate_ratio",
-                "fisher_score",
-                "risk_score",
-                "direction",
-            ],
-        )
-        writer.writeheader()
-        writer.writerows(
-            [
-                {
-                    "feature_id": 10,
-                    "deceptive_rate": 0.40,
-                    "honest_rate": 0.05,
-                    "rate_ratio": 8.0,
-                    "fisher_score": 0.30,
-                    "risk_score": 0.90,
-                    "direction": "deceptive",
-                },
-                {
-                    "feature_id": 21,
-                    "deceptive_rate": 0.22,
-                    "honest_rate": 0.08,
-                    "rate_ratio": 2.75,
-                    "fisher_score": 0.15,
-                    "risk_score": 0.45,
-                    "direction": "deceptive",
-                },
-            ]
-        )
-
-
 def test_generate_deception_report_writes_html_and_pngs(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("cli.deception_cycle.resolve_best_checkpoint", lambda config, target=None: "fake.pt")
+    monkeypatch.setattr("cli.deception_cycle.load_sae_checkpoint", lambda *args, **kwargs: (IdentitySAE(), None))
 
     targets = ["blocks.0.hook_resid_post", "blocks.1.hook_resid_post"]
     acts_dir = tmp_path / "acts"
@@ -104,6 +77,14 @@ def test_generate_deception_report_writes_html_and_pngs(tmp_path, monkeypatch):
     cfg = ConfigManager(
         {
             "model_name": "test/model",
+            "contrast_axis": {
+                "id": "deception",
+                "endpoint_a": "honest",
+                "endpoint_b": "deceptive",
+                "display_name_a": "Honest",
+                "display_name_b": "Deceptive",
+                "pair_key_fields": ["pair_id", "label", "question"],
+            },
             "layers": {target: {} for target in targets},
             "extraction": {
                 "output_dir": str(acts_dir),
@@ -124,22 +105,20 @@ def test_generate_deception_report_writes_html_and_pngs(tmp_path, monkeypatch):
                     "alert_threshold": {target: 0.5 for target in targets},
                 },
             },
+            "patterns": {
+                "cv_folds": 2,
+            },
         }
     )
 
     run_direction(cfg)
     run_probe(cfg)
+    run_patterns(cfg)
     run_monitor(cfg)
 
     dec_dir = deception_run_dir(cfg)
-    safety_dir = dec_dir / "contextual_activations" / "safety_scores"
-    summary_dir = tmp_path / "runs" / "test_model" / "safety_scores"
-    summary_dir.mkdir(parents=True)
-
-    summary_payload = {}
     for index, target in enumerate(targets):
         safe = sanitize_layer_name(target)
-        _write_contrastive_csv(safety_dir / f"{safe}_contrastive.csv")
         (dec_dir / "probes").mkdir(parents=True, exist_ok=True)
         (dec_dir / "probes" / f"{safe}_sae_features.json").write_text(
             json.dumps(
@@ -154,12 +133,6 @@ def test_generate_deception_report_writes_html_and_pngs(tmp_path, monkeypatch):
             ),
             encoding="utf-8",
         )
-        summary_payload[target] = [{"feature_id": 10 + index, "risk_score": 0.8, "rate_ratio": 7.0}]
-
-    (summary_dir / "contrastive_summary.json").write_text(
-        json.dumps(summary_payload, indent=2),
-        encoding="utf-8",
-    )
 
     adversarial_dir = dec_dir / "adversarial"
     adversarial_dir.mkdir(parents=True, exist_ok=True)
@@ -185,11 +158,13 @@ def test_generate_deception_report_writes_html_and_pngs(tmp_path, monkeypatch):
 
     report_dir = result["report_dir"]
     html_path = result["html_path"]
+    html_text = html_path.read_text(encoding="utf-8")
 
     assert report_dir.exists()
     assert html_path.exists()
-    assert "Deception Monitor Report" in html_path.read_text(encoding="utf-8")
-    assert "Top Risky Features" in html_path.read_text(encoding="utf-8")
+    assert "Deception Monitor Report" in html_text
+    assert "Top Signed Features" in html_text
+    assert "Pattern report" in html_text
 
     for chart_name in [
         "layer_comparison.png",

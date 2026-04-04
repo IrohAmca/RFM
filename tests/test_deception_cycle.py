@@ -1,7 +1,20 @@
 import torch
+from torch import nn
 
-from cli.deception_cycle import _split_pairs, run_direction, run_extract, run_monitor, run_phase, run_probe
+from cli.deception_cycle import _split_pairs, run_direction, run_extract, run_monitor, run_patterns, run_phase, run_probe
 from rfm.config import ConfigManager
+from rfm.patterns import ContrastAxisSpec, load_pattern_bundle
+
+
+class IdentitySAE(nn.Module):
+    def forward(self, x):
+        return x, x
+
+    def to(self, device):
+        return self
+
+    def eval(self):
+        return self
 
 
 def _write_chunk(path):
@@ -36,6 +49,8 @@ def _write_chunk(path):
 
 def test_deception_cycle_direction_probe_monitor_pipeline(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("cli.deception_cycle.resolve_best_checkpoint", lambda config, target=None: "fake.pt")
+    monkeypatch.setattr("cli.deception_cycle.load_sae_checkpoint", lambda *args, **kwargs: (IdentitySAE(), None))
     acts_dir = tmp_path / "acts"
     acts_dir.mkdir()
     _write_chunk(acts_dir / "chunk.pt")
@@ -73,8 +88,14 @@ def test_deception_cycle_direction_probe_monitor_pipeline(tmp_path, monkeypatch)
     probe_summary = run_probe(cfg, "blocks.0.hook_resid_post")
     assert probe_summary["blocks.0.hook_resid_post"]["validation_accuracy"] >= 0.5
 
+    pattern_result = run_patterns(cfg, "blocks.0.hook_resid_post")
+    assert pattern_result["selected_aggregation"] in {"mean", "topk_mean_4", "lastk_mean_8", "max"}
+
     monitor_report = run_monitor(cfg, "blocks.0.hook_resid_post")
     assert monitor_report["detection_rate"] >= 0.5
+
+    bundle = load_pattern_bundle(cfg, ContrastAxisSpec.from_config(cfg))
+    assert bundle["layers"]["blocks.0.hook_resid_post"]["feature_scores"]
 
 
 def test_run_extract_auto_generates_scenarios(monkeypatch):
@@ -156,6 +177,7 @@ def test_run_phase_full_includes_train(monkeypatch):
     monkeypatch.setattr("cli.deception_cycle.run_train", _recorder("train"))
     monkeypatch.setattr("cli.deception_cycle.run_direction", _recorder("direction"))
     monkeypatch.setattr("cli.deception_cycle.run_probe", _recorder("probe"))
+    monkeypatch.setattr("cli.deception_cycle.run_patterns", _recorder("patterns"))
     monkeypatch.setattr("cli.deception_cycle.run_monitor", _recorder("monitor"))
     monkeypatch.setattr("cli.deception_cycle.run_adversarial", _recorder("adversarial"))
 
@@ -168,6 +190,7 @@ def test_run_phase_full_includes_train(monkeypatch):
         "train",
         "direction",
         "probe",
+        "patterns",
         "monitor",
         "adversarial",
     ]

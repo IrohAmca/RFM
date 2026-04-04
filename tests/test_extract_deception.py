@@ -91,3 +91,5 @@ def test_extract_deception_resumes_from_existing_chunks(tmp_path):
     meta_payloads = [json.loads(path.read_text(encoding="utf-8")) for path in meta_files]
     assert meta_payloads[0]["pair_ids"] == [0, 0]
     assert meta_payloads[1]["pair_ids"] == [1, 1]
+    assert meta_payloads[0]["contrast_axis"]["endpoint_a"] == "honest"
+    assert meta_payloads[0]["contrast_axis"]["endpoint_b"] == "deceptive"

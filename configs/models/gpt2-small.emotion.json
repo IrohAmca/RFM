@@ -39,5 +39,32 @@
     "prompt_preview_chars": 180,
     "show_token_progress": true,
     "count": 2000
+  },
+  "patterns": {
+    "aggregation_candidates": [
+      "mean",
+      "topk_mean_4",
+      "lastk_mean_8",
+      "max"
+    ],
+    "cv_folds": 5,
+    "feature_pool": {
+      "endpoint_a": 12,
+      "endpoint_b": 12,
+      "interaction": 8
+    },
+    "stability_min_fraction": 0.6,
+    "max_tree_depth": 5,
+    "min_interaction_gain": 0.005,
+    "intervention_min_shift": 0.01,
+    "causal_intervention": {
+      "local_files_only": true,
+      "max_prompts": 2,
+      "max_new_tokens": 48,
+      "temperature": 0.0,
+      "top_p": 1.0,
+      "amplify_alpha": 5.0,
+      "min_effect": 0.01
+    }
   }
 }

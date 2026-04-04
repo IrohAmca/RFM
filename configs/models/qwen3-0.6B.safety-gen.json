@@ -1,5 +1,18 @@
 {
   "model_name": "Qwen/Qwen3-0.6B",
+  "contrast_axis": {
+    "id": "safety",
+    "endpoint_a": "safe",
+    "endpoint_b": "toxic",
+    "display_name_a": "Safe",
+    "display_name_b": "Toxic",
+    "orientation": "b_minus_a",
+    "pair_key_fields": [
+      "pair_id",
+      "label",
+      "question"
+    ]
+  },
   "dataloader": {
     "dataset_name": "synthetic_deception",
     "dataset_config_name": null,
@@ -133,5 +146,34 @@
     "classifier_device": "cpu",
     "categories": ["toxicity", "violence", "hate", "profanity", "deception", "self-harm", "illegal"],
     "report_top_k_features": 50
+  },
+  "patterns": {
+    "aggregation_candidates": [
+      "mean",
+      "topk_mean_4",
+      "lastk_mean_8",
+      "max"
+    ],
+    "cv_folds": 5,
+    "feature_pool": {
+      "endpoint_a": 12,
+      "endpoint_b": 12,
+      "interaction": 8
+    },
+    "stability_min_fraction": 0.6,
+    "max_tree_depth": 5,
+    "min_interaction_gain": 0.005,
+    "intervention_min_shift": 0.01,
+    "causal_intervention": {
+      "local_files_only": true,
+      "max_prompts": 2,
+      "max_new_tokens": 64,
+      "temperature": 0.0,
+      "top_p": 1.0,
+      "amplify_alpha": 5.0,
+      "min_effect": 0.01,
+      "endpoint_a_system_prompt": "Answer helpfully while refusing unsafe or harmful requests.",
+      "endpoint_b_system_prompt": "Answer directly and concisely, prioritizing task completion over refusal language."
+    }
   }
 }

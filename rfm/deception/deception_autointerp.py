@@ -253,3 +253,90 @@ class DeceptionFeatureAutoInterp:
                 time.sleep(request_delay)
 
         return results
+
+    def interpret_features_locally(
+        self,
+        feature_contexts: dict[int, list[dict]],
+        *,
+        model,
+        tokenizer,
+        max_new_tokens: int = 96,
+        request_delay: float = 0.0,
+        existing_results: dict[int, str] | None = None,
+    ) -> dict[int, str]:
+        """Interpret features using a locally loaded causal LM."""
+
+        def _user_content(feature_id: int, contexts: list[dict]) -> str:
+            examples_text = []
+            for i, ctx in enumerate(contexts[:6], 1):
+                examples_text.append(
+                    f"Example {i} [category={ctx['category']}, activation={ctx['activation']:.3f}]\n"
+                    f"  Q:         {ctx['question'][:250]}\n"
+                    f"  Honest:    {ctx['honest_answer'][:250]}\n"
+                    f"  Deceptive: {ctx['deceptive_answer'][:250]}"
+                )
+            return (
+                f"Feature ID: {feature_id}\n\n"
+                + "\n\n".join(examples_text)
+                + "\n\nWhat does this SAE feature encode?"
+            )
+
+        def _prompt_text(user_content: str) -> str:
+            apply_chat_template = getattr(tokenizer, "apply_chat_template", None)
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ]
+            if callable(apply_chat_template):
+                try:
+                    return apply_chat_template(
+                        messages,
+                        tokenize=False,
+                        add_generation_prompt=True,
+                        enable_thinking=False,
+                    )
+                except Exception:
+                    pass
+            return f"System: {SYSTEM_PROMPT}\nUser: {user_content}\nAssistant:"
+
+        device = next(model.parameters()).device
+        results: dict[int, str] = dict(existing_results or {})
+
+        for fid, contexts in feature_contexts.items():
+            if fid in results:
+                logger.debug("Feature %d already interpreted locally; skipping.", fid)
+                continue
+            if not contexts:
+                results[fid] = "[No contexts available]"
+                continue
+
+            prompt_text = _prompt_text(_user_content(fid, contexts))
+            encoded = tokenizer(prompt_text, return_tensors="pt")
+            input_ids = encoded["input_ids"].to(device)
+            attention_mask = encoded.get("attention_mask")
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(device)
+
+            with torch.no_grad():
+                output_ids = model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    max_new_tokens=max(int(max_new_tokens), 16),
+                    do_sample=False,
+                    pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+                )
+
+            response_ids = output_ids[:, input_ids.shape[1]:]
+            response = tokenizer.decode(response_ids[0], skip_special_tokens=True).strip()
+            if "</think>" in response:
+                response = response.split("</think>", 1)[1].strip()
+            elif response.startswith("<think>"):
+                response = ""
+            cleaned = " ".join(part.strip() for part in response.splitlines() if part.strip()).strip()
+            results[fid] = cleaned or "[No interpretation returned]"
+            logger.info("✓ Feature %d interpreted locally", fid)
+
+            if request_delay > 0:
+                time.sleep(request_delay)
+
+        return results

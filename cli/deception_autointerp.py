@@ -16,7 +16,7 @@ from rfm.layout import (
     resolve_requested_targets,
     sanitize_layer_name,
 )
-from rfm.patterns import ContrastAxisSpec, load_pattern_bundle, pattern_artifact_paths
+from rfm.patterns import ContrastAxisSpec, load_model_and_tokenizer, load_pattern_bundle, pattern_artifact_paths
 from rfm.sae.model import load_sae_checkpoint
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
@@ -40,22 +40,34 @@ def parse_args():
     parser.add_argument("--api-key", type=str, default=None, help="Optional API key override.")
     parser.add_argument("--base-url", type=str, default=None, help="Base URL for an OpenAI-compatible API.")
     parser.add_argument("--groq", action="store_true", help="Use Groq's OpenAI-compatible endpoint and GROQ_API_KEY.")
+    parser.add_argument("--local", action="store_true", help="Use the locally cached HF model instead of an external API.")
+    parser.add_argument("--local-max-new-tokens", type=int, default=96, help="Generation length for local interpretation mode.")
     parser.add_argument("--no-resume", action="store_true", help="Ignore existing partial results and re-interpret from scratch.")
     return parser.parse_args()
 
 
-def _resolve_api_key(args) -> str:
+def _resolve_api_key(args) -> str | None:
     if args.api_key:
         return args.api_key
     if args.groq:
-        key = os.environ.get("GROQ_API_KEY", "")
-        if key:
-            return key
-        raise ValueError("GROQ_API_KEY not set in environment.")
-    key = os.environ.get("OPENAI_API_KEY", "")
-    if key:
-        return key
-    raise ValueError("No API key found in environment. Set GROQ_API_KEY or OPENAI_API_KEY.")
+        return os.environ.get("GROQ_API_KEY", "") or None
+    return os.environ.get("OPENAI_API_KEY", "") or None
+
+
+def _resolve_scenarios_path(config) -> str | None:
+    primary = config.get("deception.scenario_generator.cache_path")
+    sibling_fallback = None
+    if primary:
+        sibling_fallback = str(Path(primary).with_name("scenarios.jsonl"))
+    fallback = deception_run_dir(config, "scenarios.jsonl")
+    candidates = [primary, sibling_fallback, str(fallback)]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if path.exists() and path.stat().st_size > 0:
+            return str(path)
+    return primary
 
 
 def _load_top_features_from_bundle(config, target: str, top_n: int) -> list[int]:
@@ -83,7 +95,17 @@ def _output_path(config, target: str) -> Path:
     return deception_run_dir(config, "autointerp", f"{safe}_interpretations.json")
 
 
-def run_autointerp(config, target: str, args, api_key: str, base_url: str) -> None:
+def run_autointerp(
+    config,
+    target: str,
+    args,
+    *,
+    api_key: str | None,
+    base_url: str | None,
+    use_local: bool,
+    runtime_model=None,
+    runtime_tokenizer=None,
+) -> None:
     target_config = config.for_target(target) if hasattr(config, "for_target") else config
     axis = ContrastAxisSpec.from_config(config)
     pattern_paths = pattern_artifact_paths(config, axis)
@@ -99,7 +121,7 @@ def run_autointerp(config, target: str, args, api_key: str, base_url: str) -> No
     sae_model, _ = load_sae_checkpoint(sae_path, device=device)
 
     chunk_dir = resolve_activations_dir(target_config, target=target)
-    scenarios_path = config.get("deception.scenario_generator.cache_path")
+    scenarios_path = _resolve_scenarios_path(config)
     interp = DeceptionFeatureAutoInterp(
         sae_model=sae_model,
         chunk_dir=chunk_dir,
@@ -122,15 +144,26 @@ def run_autointerp(config, target: str, args, api_key: str, base_url: str) -> No
         except Exception as exc:
             print(f"  Warning: could not load existing results: {exc}")
 
-    print(f"  Calling LLM ({args.model}) for interpretation ...")
-    results = interp.interpret_features(
-        feature_contexts=contexts,
-        api_key=api_key,
-        model=args.model,
-        base_url=base_url,
-        request_delay=args.request_delay,
-        existing_results=existing,
-    )
+    if use_local:
+        print(f"  Calling local model ({config.get('model_name')}) for interpretation ...")
+        results = interp.interpret_features_locally(
+            feature_contexts=contexts,
+            model=runtime_model,
+            tokenizer=runtime_tokenizer,
+            max_new_tokens=args.local_max_new_tokens,
+            request_delay=args.request_delay,
+            existing_results=existing,
+        )
+    else:
+        print(f"  Calling LLM ({args.model}) for interpretation ...")
+        results = interp.interpret_features(
+            feature_contexts=contexts,
+            api_key=api_key,
+            model=args.model,
+            base_url=base_url,
+            request_delay=args.request_delay,
+            existing_results=existing,
+        )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(
@@ -149,15 +182,33 @@ def main():
     config = ConfigManager.from_file(args.config)
 
     api_key = _resolve_api_key(args)
-    base_url = args.base_url
-    if args.groq:
-        base_url = GROQ_BASE_URL
-    if base_url is None:
-        base_url = "https://api.openai.com/v1"
+    use_local = bool(args.local or not api_key)
+    if use_local and not args.local:
+        print("[autointerp] No API key found. Falling back to the locally cached model.")
+    base_url = None
+    runtime_model = None
+    runtime_tokenizer = None
+    if use_local:
+        runtime_model, runtime_tokenizer, _ = load_model_and_tokenizer(config)
+    else:
+        base_url = args.base_url
+        if args.groq:
+            base_url = GROQ_BASE_URL
+        if base_url is None:
+            base_url = "https://api.openai.com/v1"
 
     targets = [args.layer] if args.layer else resolve_requested_targets(config)
     for target in targets:
-        run_autointerp(config, target, args, api_key, base_url)
+        run_autointerp(
+            config,
+            target,
+            args,
+            api_key=api_key,
+            base_url=base_url,
+            use_local=use_local,
+            runtime_model=runtime_model,
+            runtime_tokenizer=runtime_tokenizer,
+        )
 
 
 if __name__ == "__main__":

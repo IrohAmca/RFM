@@ -98,6 +98,39 @@ def _warn_output_dir(output_base: str | None) -> None:
         logger.warning("Ignoring --output-dir=%s. Canonical outputs are written to the pattern artifact directory.", output_base)
 
 
+def _load_direction_vectors(config) -> dict[str, torch.Tensor]:
+    """Load per-layer deception direction vectors from directions.pt, if available.
+
+    Returns a dict mapping layer_name -> direction_tensor, or {} if not found.
+    Used to enable direction-aware feature scoring in PatternDiscoveryAnalyzer.
+    """
+    try:
+        from rfm.deception.utils import deception_run_dir
+    except Exception:
+        return {}
+    try:
+        candidates = [deception_run_dir(config, "directions", "directions.pt")]
+    except Exception:
+        return {}
+    for candidate in candidates:
+        if candidate.exists():
+            try:
+                raw = torch.load(candidate, map_location="cpu", weights_only=False)
+                vectors: dict[str, torch.Tensor] = {}
+                for layer, data in raw.items():
+                    if isinstance(data, dict) and "direction" in data:
+                        vectors[layer] = data["direction"].detach().cpu().float()
+                    elif isinstance(data, torch.Tensor):
+                        vectors[layer] = data.detach().cpu().float()
+                if vectors:
+                    logger.info("Loaded direction vectors for %d layers from %s", len(vectors), candidate)
+                    return vectors
+            except Exception as exc:
+                logger.warning("Could not load direction vectors from %s: %s", candidate, exc)
+    logger.debug("No directions.pt found; direction-aware scoring disabled.")
+    return {}
+
+
 def _print_top_features(target: str, rows: list[dict], axis: ContrastAxisSpec, top_k: int) -> None:
     top_b = [row for row in rows if float(row.get("delta", 0.0)) > 0][:top_k]
     top_a = [row for row in rows if float(row.get("delta", 0.0)) < 0][:top_k]
@@ -178,13 +211,21 @@ def cmd_contrastive(config, targets, top_k, output_base):
         logger.error("No layers available for feature scoring.")
         return {}
 
+    direction_vectors = _load_direction_vectors(config)
     layer_updates = {}
     for target in available:
-        analyzer = PatternDiscoveryAnalyzer({target: sae_models[target]}, axis_spec=axis, device=device)
+        dir_vecs = {target: direction_vectors[target]} if target in direction_vectors else {}
+        analyzer = PatternDiscoveryAnalyzer(
+            {target: sae_models[target]},
+            axis_spec=axis,
+            device=device,
+            direction_vectors=dir_vecs or None,
+        )
         result = analyzer.analyze({target: chunk_dirs[target]}, **_pattern_kwargs(config))
         layer_updates[target] = layer_payload_from_result(result, target)
         _print_top_features(target, layer_updates[target]["feature_scores"], axis, top_k)
-        print(f"  Selected aggregation: {result['selected_aggregation']}")
+        da = result.get("direction_aware_scoring", False)
+        print(f"  Selected aggregation: {result['selected_aggregation']}  direction_aware={da}")
 
     update_pattern_bundle(config, axis_spec=axis, layer_updates=layer_updates)
     paths = pattern_artifact_paths(config, axis)
@@ -206,10 +247,12 @@ def cmd_cross_layer(config, targets, top_k, output_base):
         logger.error("Cross-layer motif discovery requires at least two layers with SAE checkpoints and activation chunks.")
         return {}
 
+    direction_vectors = _load_direction_vectors(config)
     analyzer = PatternDiscoveryAnalyzer(
         {target: sae_models[target] for target in available},
         axis_spec=axis,
         device=device,
+        direction_vectors=direction_vectors or None,
     )
     result = analyzer.analyze({target: chunk_dirs[target] for target in available}, **_pattern_kwargs(config))
     result = _maybe_validate_causally(config, axis, {target: sae_models[target] for target in available}, {target: chunk_dirs[target] for target in available}, result)
@@ -221,10 +264,11 @@ def cmd_cross_layer(config, targets, top_k, output_base):
         analysis=analysis_payload_from_result(result),
     )
 
-    print(f"\n[patterns] Cross-layer motif discovery")
+    da = result.get("direction_aware_scoring", False)
+    print("\n[patterns] Cross-layer motif discovery")
     print(f"  Axis: {axis.axis_id} ({axis.endpoint_a} vs {axis.endpoint_b})")
     print(f"  Layers: {', '.join(available)}")
-    print(f"  Selected aggregation: {result['selected_aggregation']}")
+    print(f"  Selected aggregation: {result['selected_aggregation']}  direction_aware={da}")
     print(f"  Stable motifs: {len(result['stable_motifs'])}")
     print(f"  Stable interactions: {len(result['stable_interactions'])}")
 

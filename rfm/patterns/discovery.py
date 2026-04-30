@@ -65,13 +65,33 @@ def _metric_summary(values: list[float]) -> dict[str, float]:
 
 
 class PatternDiscoveryAnalyzer:
-    def __init__(self, sae_models: dict[str, torch.nn.Module], *, axis_spec: ContrastAxisSpec, device: str = "cuda"):
+    def __init__(
+        self,
+        sae_models: dict[str, torch.nn.Module],
+        *,
+        axis_spec: ContrastAxisSpec,
+        device: str = "cuda",
+        direction_vectors: dict[str, torch.Tensor] | None = None,
+    ):
         self.axis = axis_spec
         self.sae_models = sae_models
         self.device = device
         for model in sae_models.values():
             model.to(device)
             model.eval()
+        # Pre-compute per-layer decoder alignment with the deception direction.
+        # alignment_by_layer[layer][f] = cosine(W_dec[f], direction)
+        self.alignment_by_layer: dict[str, np.ndarray] = {}
+        if direction_vectors:
+            for layer, direction in direction_vectors.items():
+                sae = sae_models.get(layer)
+                if sae is None:
+                    continue
+                d = direction.detach().cpu().float()
+                d = d / d.norm().clamp(min=1e-12)
+                W_dec = sae.W_dec.detach().cpu().float()
+                W_dec_normed = W_dec / W_dec.norm(dim=1, keepdim=True).clamp(min=1e-12)
+                self.alignment_by_layer[layer] = (W_dec_normed @ d).numpy()
 
     def _encode_layer(self, sae, activations: torch.Tensor, batch_size: int = 2048) -> torch.Tensor:
         all_features = []
@@ -137,7 +157,12 @@ class PatternDiscoveryAnalyzer:
             return 0.0
         return float(torch.quantile(nonzero, 0.95).item())
 
-    def _feature_score_rows(self, seq_features: torch.Tensor, y: np.ndarray) -> list[dict[str, Any]]:
+    def _feature_score_rows(
+        self,
+        seq_features: torch.Tensor,
+        y: np.ndarray,
+        layer: str | None = None,
+    ) -> list[dict[str, Any]]:
         endpoint_a_mask = torch.from_numpy((y == 0).astype(np.bool_))
         endpoint_b_mask = torch.from_numpy((y == 1).astype(np.bool_))
         a_values = seq_features[endpoint_a_mask]
@@ -151,6 +176,9 @@ class PatternDiscoveryAnalyzer:
             mw = _mw
         except Exception:
             mw = None
+
+        # Per-layer decoder alignment vector (None when no direction provided)
+        alignment_vec: np.ndarray | None = self.alignment_by_layer.get(layer) if layer else None
 
         for feature_id in range(seq_features.shape[1]):
             a_col = a_values[:, feature_id]
@@ -186,6 +214,13 @@ class PatternDiscoveryAnalyzer:
                 except Exception:
                     p_value = 1.0
             p_values.append(float(p_value))
+
+            # Direction-weighted score: alignment x delta.
+            # Features that are both geometrically aligned with the deception
+            # direction AND empirically more active in endpoint_b score highest.
+            alignment = float(alignment_vec[feature_id]) if alignment_vec is not None else 0.0
+            direction_score = alignment * delta
+
             rows.append(
                 {
                     "feature_id": int(feature_id),
@@ -193,6 +228,8 @@ class PatternDiscoveryAnalyzer:
                     "endpoint_b_mean": round(mean_b, 6),
                     "delta": round(delta, 6),
                     "effect_size": round(effect_size, 6),
+                    "direction_alignment": round(alignment, 6),
+                    "direction_score": round(direction_score, 6),
                     "activation_rate_a": round(rate_a, 6),
                     "activation_rate_b": round(rate_b, 6),
                     "threshold": round(threshold, 6),
@@ -214,9 +251,16 @@ class PatternDiscoveryAnalyzer:
         top_endpoint_a: int,
         top_endpoint_b: int,
         top_interaction: int,
+        direction_aware: bool = False,
     ) -> dict[str, list[int]]:
-        endpoint_b = [row["feature_id"] for row in score_rows if float(row["delta"]) > 0][:top_endpoint_b]
-        endpoint_a = [row["feature_id"] for row in score_rows if float(row["delta"]) < 0][:top_endpoint_a]
+        if direction_aware and any(row.get("direction_score", 0.0) != 0.0 for row in score_rows):
+            # Rank by |direction_score|, but keep endpoint buckets keyed by empirical delta.
+            sorted_by_dir = sorted(score_rows, key=lambda r: abs(float(r.get("direction_score", 0.0))), reverse=True)
+            endpoint_b = [row["feature_id"] for row in sorted_by_dir if float(row["delta"]) > 0][:top_endpoint_b]
+            endpoint_a = [row["feature_id"] for row in sorted_by_dir if float(row["delta"]) < 0][:top_endpoint_a]
+        else:
+            endpoint_b = [row["feature_id"] for row in score_rows if float(row["delta"]) > 0][:top_endpoint_b]
+            endpoint_a = [row["feature_id"] for row in score_rows if float(row["delta"]) < 0][:top_endpoint_a]
         chosen = set(endpoint_a) | set(endpoint_b)
         interaction = [
             row["feature_id"]
@@ -533,6 +577,7 @@ class PatternDiscoveryAnalyzer:
         max_tree_depth: int = 5,
         min_interaction_gain: float = 0.005,
         intervention_min_shift: float = 0.01,
+        direction_aware: bool = True,
     ) -> dict[str, Any]:
         layers = list(chunk_dirs)
         if not layers:
@@ -589,7 +634,11 @@ class PatternDiscoveryAnalyzer:
         selected_method = str(best["method"])
         seq_by_layer = seq_cache[selected_method]
 
-        layer_feature_scores = {layer: self._feature_score_rows(seq_by_layer[layer], y) for layer in layers}
+        use_direction = direction_aware and bool(self.alignment_by_layer)
+        layer_feature_scores = {
+            layer: self._feature_score_rows(seq_by_layer[layer], y, layer=layer)
+            for layer in layers
+        }
         thresholds_by_layer = {
             layer: {row["feature_id"]: float(row["threshold"]) for row in layer_feature_scores[layer]}
             for layer in layers
@@ -600,6 +649,7 @@ class PatternDiscoveryAnalyzer:
                 top_endpoint_a=top_endpoint_a,
                 top_endpoint_b=top_endpoint_b,
                 top_interaction=top_interaction,
+                direction_aware=use_direction,
             )
             for layer in layers
         }
@@ -715,6 +765,7 @@ class PatternDiscoveryAnalyzer:
             "alignment_report": alignment_report,
             "aggregation_benchmark": benchmarks,
             "selected_aggregation": selected_method,
+            "direction_aware_scoring": use_direction,
             "layer_feature_scores": layer_feature_scores,
             "feature_pools": feature_pools,
             "thresholds": thresholds_by_layer,

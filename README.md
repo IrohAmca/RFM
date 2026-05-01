@@ -64,6 +64,26 @@ Deception-specific entry points added on top of the general pipeline:
 - `cli.deception_cycle` for direction -> probe -> monitor -> adversarial runs
 - `cli.deception_report` for static HTML + PNG reporting
 - `cli.deception_autointerp` for LLM interpretations of top deception-correlated features
+- `cli.sycophancy_cycle` for Gemma Scope / Neuronpedia sycophancy feature extraction, pattern scoring, and validation
+
+---
+
+## Sycophancy Pipeline (Gemma Scope / Neuronpedia)
+
+This workflow compares `truthful` vs `sycophantic` responses using sparse feature activations from Gemma Scope / Neuronpedia sources. The original Gemma Scope release is the relevant feature dictionary suite for Gemma 2; Gemma Scope 2 is the newer Gemma 3 suite with SAEs, transcoders, crosscoders, and cross-layer transcoders.
+
+For the checked-in sycophancy config:
+
+- Generation/config model: `google/gemma-3-4b-it`
+- Neuronpedia feature model id: `gemma-2-2b`
+- Feature sources: Gemma Scope 16k transcoders
+- Main config: `configs/models/gemma-3-4b-it.sycophancy-neuronpedia.json`
+
+The latest local run should be treated as a strong discovery result, not a final causal claim. Truthful vs sycophantic responses are almost perfectly separable in the selected Gemma Scope feature space, with the main stable sycophancy feature:
+
+- `12-gemmascope-transcoder-16k::F5705`
+
+Summary metrics: Base CV F1/AUC `1.000/1.000`, label-shuffle F1/AUC `0.480/0.467`, stable motifs `9`, stable interactions `0`. The signal is strong and not explained by shuffled labels or category alone, but response length remains a partial confound and Neuronpedia rate limits left only 74 aligned records. Make causal claims only after larger extraction, response validation, feature interpretation, and behavior-level steering/ablation tests.
 
 ---
 

@@ -80,6 +80,7 @@ def build_pattern_report(bundle: dict[str, Any]) -> dict[str, Any]:
             "aggregation_benchmark": _sanitize_json(analysis.get("aggregation_benchmark", [])),
             "selected_aggregation": analysis.get("selected_aggregation"),
             "model_metrics": _sanitize_json(analysis.get("model_metrics", {})),
+            "controls": _sanitize_json(analysis.get("controls", {})),
             "motif_candidates": _sanitize_json(list(analysis.get("motif_candidates", []) or [])[:200]),
             "stable_motifs": _sanitize_json(list(analysis.get("stable_motifs", []) or [])[:100]),
             "stable_interactions": _sanitize_json(list(analysis.get("stable_interactions", []) or [])[:100]),

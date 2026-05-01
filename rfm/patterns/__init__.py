@@ -13,6 +13,7 @@ from rfm.patterns.data import (
     SequenceRecord,
     aggregate_sequence_activations,
     build_paired_activation_set,
+    dense_token_features_from_sparse_payload,
     load_sequence_records,
     validate_layer_alignment,
 )
@@ -62,6 +63,7 @@ __all__ = [
     "axis_run_dir",
     "build_paired_activation_set",
     "build_pattern_report",
+    "dense_token_features_from_sparse_payload",
     "grouped_motif_members",
     "layer_payload_from_result",
     "load_pattern_bundle",

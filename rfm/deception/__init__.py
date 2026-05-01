@@ -1,6 +1,7 @@
 """Deception-detection pipeline components."""
 
 from rfm.deception.adversarial_search import AdversarialSearch
+from rfm.deception.behavior_validation import BehaviorValidationResult, BehaviorValidator
 from rfm.deception.deception_dataset import DeceptionDataset
 from rfm.deception.deception_monitor import DeceptionMonitor, DeceptionScore
 from rfm.deception.deception_probe import DeceptionProbe, ProbeState
@@ -10,6 +11,8 @@ from rfm.deception.scenario_generator import ScenarioGenerator, ScenarioRecord
 
 __all__ = [
     "AdversarialSearch",
+    "BehaviorValidationResult",
+    "BehaviorValidator",
     "DeceptionDataset",
     "DeceptionMonitor",
     "DeceptionProbe",

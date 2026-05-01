@@ -10,6 +10,7 @@ import torch
 from tqdm import tqdm
 
 from rfm.config import ConfigManager
+from rfm.deception.behavior_validation import BehaviorValidator, BehaviorValidationResult
 from rfm.deception import DeceptionDataset
 from rfm.deception.utils import format_chat_prompt
 from rfm.extractors.hf_generate import HFGenerationExtractor
@@ -58,6 +59,7 @@ def _chunk_metadata(
     buffer_questions,
     buffer_responses,
     buffer_sources,
+    buffer_validations,
     extraction_mode,
     axis_spec,
 ):
@@ -73,6 +75,7 @@ def _chunk_metadata(
         "questions": list(buffer_questions),
         "responses": list(buffer_responses),
         "sources": list(buffer_sources),
+        "validations": list(buffer_validations),
         "extraction_mode": extraction_mode,
         "extraction_timestamp": time.time(),
         "contrast_axis": axis_spec.to_dict(),
@@ -130,6 +133,7 @@ def flush_chunk(
     buffer_questions,
     buffer_responses,
     buffer_sources,
+    buffer_validations,
     target,
     model_name,
     chunk_index,
@@ -155,6 +159,7 @@ def flush_chunk(
         buffer_questions=buffer_questions,
         buffer_responses=buffer_responses,
         buffer_sources=buffer_sources,
+        buffer_validations=buffer_validations,
         extraction_mode=extraction_mode,
         axis_spec=axis_spec,
     )
@@ -188,6 +193,7 @@ def flush_chunk(
     buffer_questions.clear()
     buffer_responses.clear()
     buffer_sources.clear()
+    buffer_validations.clear()
     return True
 
 
@@ -216,6 +222,7 @@ def flush_all_targets(
                 buf["questions"],
                 buf["responses"],
                 buf["sources"],
+                buf["validations"],
                 target,
                 model_name,
                 chunk_index,
@@ -231,6 +238,57 @@ def flush_all_targets(
 
 def _decode_response(extractor: HFGenerationExtractor, token_tensor: torch.Tensor) -> str:
     return extractor.tokenizer.decode(token_tensor.tolist(), skip_special_tokens=True)
+
+
+def _validation_failure(label: str, validation: BehaviorValidationResult | None) -> str:
+    if validation is None:
+        return f"{label}: no validation result"
+    reasons = ",".join(validation.reasons) if validation.reasons else "unknown"
+    return (
+        f"{label}: {reasons} "
+        f"(expected={validation.expected_similarity:.3f}, "
+        f"opposite={validation.opposite_similarity:.3f}, "
+        f"attempt={validation.attempt})"
+    )
+
+
+def _extract_generate_validated(
+    *,
+    extractor: HFGenerationExtractor,
+    prompt: str,
+    targets,
+    label: str,
+    scenario: dict,
+    axis,
+    validator: BehaviorValidator,
+    max_new_tokens: int,
+    temperature: float,
+    top_p: float,
+) -> tuple[dict, str, dict]:
+    last_validation: BehaviorValidationResult | None = None
+    last_response = ""
+    for attempt in range(1, validator.max_attempts + 1):
+        result = extractor.extract_generate_multi(
+            prompt,
+            targets,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+        )
+        response = _decode_response(extractor, result[targets[0]]["tokens"])
+        validation = validator.validate(
+            response=response,
+            label=label,
+            row=scenario,
+            axis=axis,
+            attempt=attempt,
+        )
+        last_validation = validation
+        last_response = response
+        if validation.accepted:
+            return result, response, validation.to_dict()
+
+    raise ValueError(_validation_failure(label, last_validation) + f" response={last_response[:160]!r}")
 
 
 def extract_all_targets(targets, extractor, dataset, config):
@@ -254,6 +312,7 @@ def extract_all_targets(targets, extractor, dataset, config):
     max_new_tokens = int(generation_cfg.get("max_new_tokens", 128))
     temperature = float(generation_cfg.get("temperature", 0.8))
     top_p = float(generation_cfg.get("top_p", 0.95))
+    validator = BehaviorValidator.from_config(config, "deception.extraction.validation")
 
     output_dirs = {}
     buffers = {}
@@ -280,6 +339,7 @@ def extract_all_targets(targets, extractor, dataset, config):
             "questions": [],
             "responses": [],
             "sources": [],
+            "validations": [],
         }
 
     next_chunk_index = max(
@@ -331,27 +391,37 @@ def extract_all_targets(targets, extractor, dataset, config):
 
         try:
             if mode == "generate":
-                honest_result = extractor.extract_generate_multi(
-                    honest_prompt,
-                    targets,
+                honest_result, honest_response, honest_validation = _extract_generate_validated(
+                    extractor=extractor,
+                    prompt=honest_prompt,
+                    targets=targets,
+                    label=axis.endpoint_a,
+                    scenario=scenario,
+                    axis=axis,
+                    validator=validator,
                     max_new_tokens=max_new_tokens,
                     temperature=temperature,
                     top_p=top_p,
                 )
-                deceptive_result = extractor.extract_generate_multi(
-                    deceptive_prompt,
-                    targets,
+                deceptive_result, deceptive_response, deceptive_validation = _extract_generate_validated(
+                    extractor=extractor,
+                    prompt=deceptive_prompt,
+                    targets=targets,
+                    label=axis.endpoint_b,
+                    scenario=scenario,
+                    axis=axis,
+                    validator=validator,
                     max_new_tokens=max_new_tokens,
                     temperature=temperature,
                     top_p=top_p,
                 )
-                honest_response = _decode_response(extractor, honest_result[targets[0]]["tokens"])
-                deceptive_response = _decode_response(extractor, deceptive_result[targets[0]]["tokens"])
             else:
                 honest_response = scenario["honest_answer"]
                 deceptive_response = scenario["deceptive_answer"]
                 honest_result = extractor.extract_replay_multi(honest_prompt, honest_response, targets)
                 deceptive_result = extractor.extract_replay_multi(deceptive_prompt, deceptive_response, targets)
+                honest_validation = {"accepted": True, "label": axis.endpoint_a, "mode": "replay"}
+                deceptive_validation = {"accepted": True, "label": axis.endpoint_b, "mode": "replay"}
         except Exception as exc:
             print(f"[extract_deception] Warning: skipping pair {pair_id}: {exc}")
             skipped += 1
@@ -375,6 +445,9 @@ def extract_all_targets(targets, extractor, dataset, config):
                 buf["questions"].append(question)
                 buf["responses"].append(response_text)
                 buf["sources"].append(source)
+                buf["validations"].append(
+                    honest_validation if label == axis.endpoint_a else deceptive_validation
+                )
 
         accepted += 1
         if targets and sum(segment.shape[0] for segment in buffers[targets[0]]["acts"]) >= chunk_size:

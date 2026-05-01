@@ -105,6 +105,49 @@ def aggregate_sequence_activations(
     return torch.stack(rows, dim=0)
 
 
+def dense_token_features_from_sparse_payload(payload: dict[str, Any]) -> torch.Tensor:
+    """Convert a preencoded sparse feature-store chunk to dense token features.
+
+    Supported payloads:
+    - ``feature_activations``: already-dense ``[n_tokens, d_sae]`` tensor.
+    - ``feature_indices`` + ``feature_values`` + ``d_sae``: top-k sparse rows.
+
+    Sparse rows use missing feature ids as ``-1``; absent features are zero.
+    """
+    if "feature_activations" in payload:
+        activations = torch.as_tensor(payload["feature_activations"]).detach().cpu().float()
+        if activations.ndim != 2:
+            raise ValueError(f"feature_activations must be [n_tokens, d_sae], got {tuple(activations.shape)}")
+        return activations
+
+    if "feature_indices" not in payload or "feature_values" not in payload:
+        raise ValueError("Sparse feature payload must contain feature_indices and feature_values.")
+
+    metadata = dict(payload.get("metadata", {}) or {})
+    d_sae = int(payload.get("d_sae", metadata.get("d_sae", 0)) or 0)
+    if d_sae <= 0:
+        raise ValueError("Sparse feature payload must provide a positive d_sae.")
+
+    indices = torch.as_tensor(payload["feature_indices"], dtype=torch.long)
+    values = torch.as_tensor(payload["feature_values"], dtype=torch.float32)
+    if indices.ndim == 1:
+        indices = indices.unsqueeze(1)
+    if values.ndim == 1:
+        values = values.unsqueeze(1)
+    if indices.shape != values.shape:
+        raise ValueError(
+            "feature_indices and feature_values must have the same shape. "
+            f"Got {tuple(indices.shape)} vs {tuple(values.shape)}."
+        )
+
+    dense = torch.zeros((indices.shape[0], d_sae), dtype=torch.float32)
+    valid = (indices >= 0) & (indices < d_sae) & (values != 0)
+    if valid.any():
+        row_idx = torch.arange(indices.shape[0]).unsqueeze(1).expand_as(indices)[valid]
+        dense[row_idx, indices[valid]] = values[valid]
+    return dense
+
+
 def _records_from_metadata(metadata: dict[str, Any], *, chunk_id: int, sequence_offset: int = 0) -> list[SequenceRecord]:
     labels = list(metadata.get("labels", []))
     token_lengths = [int(length) for length in metadata.get("token_lengths", [])]

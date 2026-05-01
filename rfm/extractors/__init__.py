@@ -14,15 +14,37 @@ class ExtractorFactory:
         if hasattr(config, "get"):
             backend = config.get("extraction.extractor_backend", "transformer_lens")
         elif isinstance(config, dict):
-            backend = config.get("extraction", {}).get("extractor_backend", "transformer_lens")
+            backend = config.get("extraction", {}).get(
+                "extractor_backend", "transformer_lens"
+            )
+        backend_name = str(backend).lower()
 
-        if str(backend).lower() in {"hf", "huggingface", "hf_causal"}:
+        if backend_name in {"hf", "huggingface", "hf_causal"}:
             return HFCausalExtractor(config)
 
-        if str(backend).lower() in {"hf_generate", "generate"}:
+        if backend_name in {"hf_generate", "generate"}:
             return HFGenerationExtractor(config)
+
+        if backend_name in {"groq_generate", "groq"}:
+            from rfm.extractors.groq_generate import GroqGenerationExtractor
+
+            return GroqGenerationExtractor(config)
 
         return GPT2Extractor(config)
 
 
-__all__ = ["ExtractorFactory", "GPT2Extractor", "HFCausalExtractor", "HFGenerationExtractor"]
+def __getattr__(name):
+    if name == "GroqGenerationExtractor":
+        from rfm.extractors.groq_generate import GroqGenerationExtractor
+
+        return GroqGenerationExtractor
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+__all__ = [
+    "ExtractorFactory",
+    "GroqGenerationExtractor",
+    "GPT2Extractor",
+    "HFCausalExtractor",
+    "HFGenerationExtractor",
+]

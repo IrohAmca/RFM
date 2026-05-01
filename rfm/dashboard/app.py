@@ -149,39 +149,64 @@ def load_training_history(checkpoint_path):
     return state.get("history", [])
 
 
-@st.cache_data
-def load_extraction_metadata(config):
+def _collect_extraction_metadata(config):
     targets = resolve_requested_targets(config)
     if not targets:
         return None
-    target = targets[0]
-    act_dir = Path(resolve_activations_dir(config, target=target))
-    meta_files = list(act_dir.glob("*.meta.json"))
-    if not meta_files:
-        return None
 
     rows = []
-    for meta_path in meta_files:
-        payload = json.loads(meta_path.read_text(encoding="utf-8"))
-        labels = payload.get("labels", [])
-        categories = payload.get("categories", [])
-        difficulties = payload.get("difficulties", [])
-        lengths = payload.get("token_lengths", [])
-        questions = payload.get("questions", [])
-        responses = payload.get("responses", [])
-        for index, label in enumerate(labels):
-            rows.append(
-                {
-                    "chunk_id": payload.get("chunk_id", 0),
-                    "label": label,
-                    "category": categories[index] if index < len(categories) else "unknown",
-                    "difficulty": difficulties[index] if index < len(difficulties) else "unknown",
-                    "token_length": lengths[index] if index < len(lengths) else 0,
-                    "question": questions[index] if index < len(questions) else "",
-                    "response": responses[index] if index < len(responses) else "",
-                }
-            )
+    for target in targets:
+        candidate_dirs = [Path(resolve_activations_dir(config, target=target))]
+        if config.get("sycophancy", None):
+            try:
+                from rfm.sycophancy import feature_store_dir
+
+                candidate_dirs.append(feature_store_dir(config, target))
+            except Exception:
+                pass
+        seen_dirs = []
+        for candidate in candidate_dirs:
+            if candidate not in seen_dirs:
+                seen_dirs.append(candidate)
+        for act_dir in seen_dirs:
+            if not act_dir.exists():
+                continue
+            meta_files = sorted(act_dir.glob("*.meta.json"))
+            if meta_files:
+                break
+        else:
+            meta_files = []
+        for meta_path in meta_files:
+            payload = json.loads(meta_path.read_text(encoding="utf-8"))
+            labels = payload.get("labels", [])
+            categories = payload.get("categories", [])
+            difficulties = payload.get("difficulties", [])
+            lengths = payload.get("token_lengths", [])
+            questions = payload.get("questions", [])
+            responses = payload.get("responses", [])
+            sources = payload.get("sources", [])
+            for index, label in enumerate(labels):
+                rows.append(
+                    {
+                        "layer": _format_target_label(target),
+                        "target": target,
+                        "chunk_id": payload.get("chunk_id", 0),
+                        "label": label,
+                        "category": categories[index] if index < len(categories) else "unknown",
+                        "difficulty": difficulties[index] if index < len(difficulties) else "unknown",
+                        "token_length": lengths[index] if index < len(lengths) else 0,
+                        "question": questions[index] if index < len(questions) else "",
+                        "response": responses[index] if index < len(responses) else "",
+                        "source": sources[index] if index < len(sources) else payload.get("source_id", ""),
+                    }
+                )
     return pd.DataFrame(rows) if rows else None
+
+
+@st.cache_data
+def load_extraction_metadata(config_path: str):
+    config = ConfigManager.from_file(config_path)
+    return _collect_extraction_metadata(config)
 
 
 @st.cache_data
@@ -219,6 +244,10 @@ def _format_target_label(target: str) -> str:
     if len(parts) >= 2 and parts[-2].isdigit():
         return f"L{parts[-2]} resid_post"
     return str(target)
+
+
+def _format_target_summary(targets: list[str]) -> str:
+    return ", ".join(_format_target_label(target) for target in targets)
 
 
 def _select_target(config, key: str, label: str = "Layer"):
@@ -590,9 +619,13 @@ def render_training_metrics(config):
         st.plotly_chart(fig_active, use_container_width=True)
 
 
-def render_extraction_overview(config):
+def render_extraction_overview(config, config_path: str | None = None):
     st.header("Extraction Overview")
-    meta_df = load_extraction_metadata(config)
+    meta_df = (
+        load_extraction_metadata(config_path)
+        if config_path
+        else _collect_extraction_metadata(config)
+    )
     if meta_df is None or meta_df.empty:
         st.warning("No extraction metadata found.")
         return
@@ -604,6 +637,9 @@ def render_extraction_overview(config):
     with col2:
         fig_len = px.box(meta_df, x="label", y="token_length", color="label", points="all", title="Token Lengths")
         st.plotly_chart(fig_len, use_container_width=True)
+    if "layer" in meta_df.columns and meta_df["layer"].nunique() > 1:
+        fig_layer = px.histogram(meta_df, x="layer", color="label", barmode="group", title="Layer/Source Distribution")
+        st.plotly_chart(fig_layer, use_container_width=True)
 
 
 def render_signed_feature_analysis(config):
@@ -969,7 +1005,7 @@ def main():
     st.sidebar.markdown(f"**Model:** `{config.get('model_name')}`")
     targets = resolve_requested_targets(config)
     if targets:
-        st.sidebar.markdown(f"**Layers:** `{', '.join(t.split('.')[-2] for t in targets)}`")
+        st.sidebar.markdown(f"**Layers:** `{_format_target_summary(targets)}`")
 
     has_deception = bool(config.get("deception", None))
     if has_deception:
@@ -991,15 +1027,24 @@ def main():
             st.sidebar.markdown(f"{icons[status[step]]} {label}")
         st.sidebar.divider()
 
-    pages = [
-        "Deception Monitor",
-        "Feature Explorer",
-        "Training Metrics",
-        "Steering Playground",
-        "Extraction Overview",
-        "Signed Feature Analysis",
-        "Cross-Layer View",
-    ]
+    if has_deception:
+        pages = [
+            "Deception Monitor",
+            "Feature Explorer",
+            "Training Metrics",
+            "Steering Playground",
+            "Extraction Overview",
+            "Signed Feature Analysis",
+            "Cross-Layer View",
+        ]
+    else:
+        pages = [
+            "Signed Feature Analysis",
+            "Cross-Layer View",
+            "Feature Explorer",
+            "Training Metrics",
+            "Extraction Overview",
+        ]
     page = st.sidebar.radio("Navigation", pages)
 
     if page == "Deception Monitor":
@@ -1011,7 +1056,7 @@ def main():
     elif page == "Steering Playground":
         render_steering_playground(config, config_path)
     elif page == "Extraction Overview":
-        render_extraction_overview(config)
+        render_extraction_overview(config, config_path)
     elif page == "Signed Feature Analysis":
         render_signed_feature_analysis(config)
     elif page == "Cross-Layer View":

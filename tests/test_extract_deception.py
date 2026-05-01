@@ -12,6 +12,14 @@ class _Tokenizer:
         return "decoded"
 
 
+class _GenerateTokenizer:
+    def __init__(self, responses):
+        self.responses = responses
+
+    def decode(self, tokens, skip_special_tokens=True):
+        return self.responses[int(tokens[0])]
+
+
 class _FakeExtractor:
     def __init__(self):
         self.model_name = "test/model"
@@ -24,6 +32,28 @@ class _FakeExtractor:
             payload[target] = {
                 "activations": torch.tensor([[value, value + 0.5]], dtype=torch.float32),
                 "tokens": torch.tensor([1], dtype=torch.long),
+            }
+        return payload
+
+
+class _FakeGenerateExtractor:
+    def __init__(self, scripted_responses):
+        self.model_name = "test/model"
+        self.scripted_responses = list(scripted_responses)
+        self.tokenizer = _GenerateTokenizer({
+            index: response
+            for index, response in enumerate(self.scripted_responses)
+        })
+        self.calls = 0
+
+    def extract_generate_multi(self, prompt, targets, max_new_tokens, temperature, top_p):
+        token_id = self.calls
+        self.calls += 1
+        payload = {}
+        for target in targets:
+            payload[target] = {
+                "activations": torch.tensor([[float(token_id), float(token_id) + 0.5]], dtype=torch.float32),
+                "tokens": torch.tensor([token_id], dtype=torch.long),
             }
         return payload
 
@@ -93,3 +123,32 @@ def test_extract_deception_resumes_from_existing_chunks(tmp_path):
     assert meta_payloads[1]["pair_ids"] == [1, 1]
     assert meta_payloads[0]["contrast_axis"]["endpoint_a"] == "honest"
     assert meta_payloads[0]["contrast_axis"]["endpoint_b"] == "deceptive"
+
+
+def test_extract_deception_generate_retries_until_behavior_validated(tmp_path):
+    dataset_path = tmp_path / "scenarios.jsonl"
+    _write_dataset(dataset_path)
+
+    dataset = DeceptionDataset(input_path=dataset_path, mode="paired")
+    dataset.load()
+    extractor = _FakeGenerateExtractor([
+        "I cannot answer that.",
+        "H1",
+        "I cannot help provide a misleading answer.",
+        "D1",
+    ])
+    targets = ["blocks.0.hook_resid_post"]
+    config = _make_config(tmp_path / "acts", count=1)
+    config.set("deception.extraction.mode", "generate")
+    config.set("deception.extraction.validation.min_response_tokens", 1)
+    config.set("deception.extraction.validation.min_expected_similarity", 0.5)
+    config.set("deception.extraction.validation.max_attempts", 2)
+
+    extract_all_targets(targets, extractor, dataset, config)
+
+    assert extractor.calls == 4
+    meta_path = next((tmp_path / "acts").glob("*.meta.json"))
+    metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert metadata["responses"] == ["H1", "D1"]
+    assert [item["accepted"] for item in metadata["validations"]] == [True, True]
+    assert [item["attempt"] for item in metadata["validations"]] == [2, 2]

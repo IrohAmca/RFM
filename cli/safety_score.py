@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 
 import torch
+from tqdm import tqdm
 
 from rfm.config import ConfigManager
 from rfm.layout import resolve_activations_dir, resolve_best_checkpoint, resolve_requested_targets
@@ -74,7 +75,7 @@ def _pattern_kwargs(config) -> dict:
 def _resolve_available_inputs(config, targets: list[str], *, device: str) -> tuple[dict[str, torch.nn.Module], dict[str, str]]:
     sae_models: dict[str, torch.nn.Module] = {}
     chunk_dirs: dict[str, str] = {}
-    for target in targets:
+    for target in tqdm(targets, desc="[patterns] Resolving inputs", unit="layer"):
         target_config = config.for_target(target) if hasattr(config, "for_target") else config
         try:
             sae_path = resolve_best_checkpoint(target_config, target=target)
@@ -213,7 +214,7 @@ def cmd_contrastive(config, targets, top_k, output_base):
 
     direction_vectors = _load_direction_vectors(config)
     layer_updates = {}
-    for target in available:
+    for target in tqdm(available, desc="[patterns] Scoring layers", unit="layer"):
         dir_vecs = {target: direction_vectors[target]} if target in direction_vectors else {}
         analyzer = PatternDiscoveryAnalyzer(
             {target: sae_models[target]},
@@ -256,7 +257,9 @@ def cmd_cross_layer(config, targets, top_k, output_base):
     )
     result = analyzer.analyze({target: chunk_dirs[target] for target in available}, **_pattern_kwargs(config))
     result = _maybe_validate_causally(config, axis, {target: sae_models[target] for target in available}, {target: chunk_dirs[target] for target in available}, result)
-    layer_updates = {target: layer_payload_from_result(result, target) for target in available}
+    layer_updates = {}
+    for target in tqdm(available, desc="[patterns] Writing motif layers", unit="layer"):
+        layer_updates[target] = layer_payload_from_result(result, target)
     update_pattern_bundle(
         config,
         axis_spec=axis,

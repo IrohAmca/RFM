@@ -32,6 +32,7 @@ def analysis_payload_from_result(result: dict[str, Any]) -> dict[str, Any]:
         "aggregation_benchmark": result.get("aggregation_benchmark", []),
         "selected_aggregation": result.get("selected_aggregation"),
         "model_metrics": result.get("model_metrics", {}),
+        "controls": result.get("controls", {}),
         "stable_motifs": result.get("stable_motifs", []),
         "stable_interactions": result.get("stable_interactions", []),
         "feature_importance": result.get("feature_importance", []),

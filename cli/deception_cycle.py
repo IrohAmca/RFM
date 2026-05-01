@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import torch
+from tqdm import tqdm
 
 from cli.extract_deception import extract_all_targets
 from cli.train import run_training
@@ -200,7 +201,11 @@ def run_direction(config, layer_override: str | None = None) -> dict[str, Direct
 
     results = {}
     layer_updates = {}
-    for target in _targets(config, layer_override):
+    for target in tqdm(
+        _targets(config, layer_override),
+        desc="[deception_cycle] Training directions",
+        unit="layer",
+    ):
         target_config = config.for_target(target) if hasattr(config, "for_target") else config
         chunk_dir = resolve_activations_dir(target_config, target=target)
         paired = finder.load_paired_activations(chunk_dir)
@@ -258,7 +263,11 @@ def run_probe(config, layer_override: str | None = None) -> dict[str, dict]:
         aggregation=config.get("deception.direction.aggregation", "mean"),
     )
 
-    for target in _targets(config, layer_override):
+    for target in tqdm(
+        _targets(config, layer_override),
+        desc="[deception_cycle] Training probes",
+        unit="layer",
+    ):
         target_config = config.for_target(target) if hasattr(config, "for_target") else config
         chunk_dir = resolve_activations_dir(target_config, target=target)
         paired = finder.load_paired_activations(chunk_dir)
@@ -340,7 +349,11 @@ def run_patterns(config, layer_override: str | None = None) -> dict:
     targets = _targets(config, layer_override)
     sae_models = {}
     chunk_dirs = {}
-    for target in targets:
+    for target in tqdm(
+        targets,
+        desc="[deception_cycle] Loading pattern inputs",
+        unit="layer",
+    ):
         target_config = config.for_target(target) if hasattr(config, "for_target") else config
         try:
             sae_path = resolve_best_checkpoint(target_config, target=target)
@@ -378,7 +391,11 @@ def run_patterns(config, layer_override: str | None = None) -> dict:
     )
 
     layer_updates = {}
-    for target in available:
+    for target in tqdm(
+        available,
+        desc="[deception_cycle] Writing pattern layers",
+        unit="layer",
+    ):
         layer_updates[target] = layer_payload_from_result(result, target)
 
     update_pattern_bundle(
@@ -429,7 +446,11 @@ def run_monitor(config, layer_override: str | None = None) -> dict:
         aggregation=config.get("deception.direction.aggregation", "mean"),
     )
     layer_pairs = {}
-    for target in targets:
+    for target in tqdm(
+        targets,
+        desc="[deception_cycle] Loading monitor inputs",
+        unit="layer",
+    ):
         target_config = config.for_target(target) if hasattr(config, "for_target") else config
         chunk_dir = resolve_activations_dir(target_config, target=target)
         layer_pairs[target] = finder.load_paired_activations(chunk_dir)
@@ -437,7 +458,11 @@ def run_monitor(config, layer_override: str | None = None) -> dict:
     reference_target = targets[0]
     n_pairs = layer_pairs[reference_target]["honest"].shape[0]
     tp = fp = tn = fn = 0
-    for index in range(n_pairs):
+    for index in tqdm(
+        range(n_pairs),
+        desc="[deception_cycle] Monitoring pairs",
+        unit="pair",
+    ):
         honest_score = monitor.score_generation(
             {layer: layer_pairs[layer]["honest"][index].unsqueeze(0) for layer in targets}
         )
@@ -557,14 +582,20 @@ def run_phase(config, phase: str, layer_override: str | None = None):
     if phase == "adversarial":
         return run_adversarial(config, layer_override)
 
-    run_generate(config)
-    run_extract(config, layer_override, ensure_scenarios=False)
-    run_train(config, layer_override)
-    run_direction(config, layer_override)
-    run_probe(config, layer_override)
-    run_patterns(config, layer_override)
-    run_monitor(config, layer_override)
-    return run_adversarial(config, layer_override)
+    steps = [
+        ("generate", lambda: run_generate(config)),
+        ("extract", lambda: run_extract(config, layer_override, ensure_scenarios=False)),
+        ("train", lambda: run_train(config, layer_override)),
+        ("direction", lambda: run_direction(config, layer_override)),
+        ("probe", lambda: run_probe(config, layer_override)),
+        ("patterns", lambda: run_patterns(config, layer_override)),
+        ("monitor", lambda: run_monitor(config, layer_override)),
+        ("adversarial", lambda: run_adversarial(config, layer_override)),
+    ]
+    result = None
+    for _, step in tqdm(steps, desc="[deception_cycle] Pipeline", unit="phase"):
+        result = step()
+    return result
 
 
 def main():
